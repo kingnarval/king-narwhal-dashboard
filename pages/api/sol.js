@@ -5,37 +5,32 @@ export default async function handler(req, res) {
     if (TTR_CONFIG?.SOURCE !== "COINGECKO") {
       return res.status(200).json({
         ok: false,
-        error: "TTR_CONFIG.SOURCE is not COINGECKO (test mode)",
+        error: "TTR_CONFIG.SOURCE is not COINGECKO",
         source: TTR_CONFIG?.SOURCE || null,
       });
     }
 
-    const id = TTR_CONFIG?.CG_ID || "solana";
-    const url = `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(
-      id
-    )}&vs_currencies=usd`;
+    const id = TTR_CONFIG?.CG_ID || "bonk";
 
-    const r = await fetch(url, { headers: { accept: "application/json" } });
-    const text = await r.text();
+    const url =
+      "https://api.coingecko.com/api/v3/coins/markets" +
+      `?vs_currency=usd&ids=${encodeURIComponent(id)}`;
 
-    if (!r.ok) {
-      return res.status(r.status).json({
-        ok: false,
-        where: "coingecko",
-        status: r.status,
-        bodyPreview: text.slice(0, 200),
-      });
-    }
+    const r = await fetch(url, {
+      headers: { accept: "application/json" },
+    });
 
-    const data = JSON.parse(text);
-    const priceUsd = data?.[id]?.usd ?? null;
+    const data = await r.json();
+    const coin = Array.isArray(data) ? data[0] : null;
 
     return res.status(200).json({
       ok: true,
       source: "COINGECKO",
       id,
-      priceUsd,
-      raw: data,
+      priceUsd: coin?.current_price ?? null,
+      marketCap: coin?.market_cap ?? null,
+      supply: coin?.circulating_supply ?? null,
+      raw: coin,
     });
   } catch (e) {
     console.error("API /sol error:", e);
