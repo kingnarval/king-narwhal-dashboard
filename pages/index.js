@@ -61,6 +61,38 @@ const SAFEZONE_OFFSET = { x: 20.5, y: 0 }; // +x = droite, +y = bas
 const keyOf = (q, r) => `${q},${r}`;
 const sleep0 = () => new Promise((r) => setTimeout(r, 0));
 
+// ============================================================================
+// Stable RNG (deterministic) — removes micro-jitter between renders
+// - We avoid Math.random() in placement/shuffles so clusters don't "dance"
+// - Seeded by render context (coinsSig + ttrCap), so same data => same layout
+// ============================================================================
+function hash32(str) {
+  // FNV-1a 32-bit
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function makeSeededRand(seedStr) {
+  return mulberry32(hash32(String(seedStr || "")));
+}
+function jitterSigned(seedStr) {
+  // [-0.5, +0.5)
+  return makeSeededRand(seedStr)() - 0.5;
+}
+
 function drawHexImage(g, href, h, hexRadius, scale) {
   const size = hexRadius * 2 * scale;
   g.append("image")
@@ -217,8 +249,6 @@ function computeTtrMaterials(capUSD, scaleMode) {
     return "final";
   }
 
-  // Build in spiral order, filling until we reach the cap (visual approximation),
-  // while keeping the crown material rule above.
   const spiral = genSpiralAxialPositions(61);
   const mats = [];
 
@@ -244,39 +274,78 @@ function computeTtrMaterials(capUSD, scaleMode) {
   return mats.slice(0, 61);
 }
 
+// Rings-only variant:
+// - Used when the core itself represents a fixed value (e.g. 100k)
+// - capMatsUSD is the "excess" above the core (so 0 => no rings).
+function computeTtrMaterialsRingsOnly(capMatsUSD, scaleMode) {
+  const cap = Math.max(0, Number(capMatsUSD) || 0);
+  if (cap <= 0) return [];
+
+  const matsTable = getTtrMats(scaleMode);
+  const byKey = Object.fromEntries(matsTable.map((m) => [m.key, m]));
+
+  function keyForRingDist(dist) {
+    // We start at ring 1 (dist=1) as copper.
+    if (dist <= 1) return "copper";
+    if (dist === 2) return "silver";
+    if (dist === 3) return "gold";
+    return "final";
+  }
+
+  const spiral = genSpiralAxialPositions(61).slice(1); // exclude center
+  const mats = [];
+
+  let acc = 0;
+  for (let i = 0; i < spiral.length; i++) {
+    const [dq, dr] = spiral[i];
+    const dist = axialDistance(0, 0, dq, dr);
+    const key = keyForRingDist(dist);
+    const mat = byKey[key] || byKey.copper;
+
+    if (acc >= cap) break;
+    mats.push(mat);
+    acc += mat.value;
+  }
+
+  return mats;
+}
+
+
 // ============================================================================
 // Fetch cryptos depuis Birdeye (via API interne /api/birdeye-window)
 // ============================================================================
-async function fetchWindowCoins() {
+let __lastGoodWindow = null;
+
+async function fetchWindowCoins(force = false) {
   try {
-    const res = await fetch("/api/birdeye-window");
+    const url = force ? "/api/birdeye-window?force=1" : "/api/birdeye-window";
+    const res = await fetch(url, force ? { cache: "no-store" } : undefined);
+
     if (!res.ok) {
       console.error("Birdeye window HTTP error:", res.status);
-      return {
-        source: "Birdeye (no data)",
-        coins: [],
-      };
+      if (__lastGoodWindow) return { ...__lastGoodWindow, meta: { servedFrom: "client-last-good" } };
+      return { source: "Birdeye (no data)", coins: [] };
     }
 
     const json = await res.json();
-    if (!json || !Array.isArray(json.coins)) {
-      console.error("Birdeye window bad json:", json);
-      return {
-        source: "Birdeye (bad json)",
-        coins: [],
+
+    const coins = Array.isArray(json?.coins) ? json.coins : [];
+
+    if (coins.length > 0) {
+      __lastGoodWindow = {
+        source: json.source || "Birdeye Token List (BDS)",
+        coins,
       };
+      return __lastGoodWindow;
     }
 
-    return {
-      source: json.source || "Birdeye Token List (BDS)",
-      coins: json.coins,
-    };
+    if (__lastGoodWindow) return { ...__lastGoodWindow, meta: { servedFrom: "client-last-good" } };
+
+    return { source: json?.source || "Birdeye (empty)", coins: [] };
   } catch (e) {
     console.error("Birdeye window fetch failed:", e);
-    return {
-      source: "Birdeye (fetch failed)",
-      coins: [],
-    };
+    if (__lastGoodWindow) return { ...__lastGoodWindow, meta: { servedFrom: "client-last-good" } };
+    return { source: "Birdeye (fetch failed)", coins: [] };
   }
 }
 
@@ -285,27 +354,103 @@ async function fetchWindowCoins() {
 // ============================================================================
 export default function Home() {
   const [mounted, setMounted] = useState(false);
+
+  // =============================
+  // Refresh cooldown & stability
+  // =============================
+  const [refreshing, setRefreshing] = useState(false);
+  const [cooldownLeft, setCooldownLeft] = useState(0);
+
+  const REFRESH_COOLDOWN_MS = 20_000;
+  const lastRefreshAtRef = useRef(0);
+  const cooldownTimerRef = useRef(null);
+
   useEffect(() => setMounted(true), []);
+
+  // ✅ cleanup cooldown timer (avoid leak on hot reload / nav)
+  useEffect(() => {
+    return () => {
+      if (cooldownTimerRef.current) {
+        clearInterval(cooldownTimerRef.current);
+        cooldownTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const { x, y } = useGlobalScale();
 
+  // Admin mode (enables debug toggle + T/G testing) via URL: ?admin=kingnarwhal24568
+  const IS_ADMIN =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("admin") === "kingnarwhal24568";
+
+
+// --------------------------------------------------------------------------
+// Admin-only TTR test mode:
+// - Use a real Solana mint from Birdeye window as "fake TTR" (no forcing, real cap).
+// - Enable via URL (admin required): ?admin=kingnarwhal24568&ttrTestMint=<MINT>
+//   Example: &ttrTestMint=MANEKI_MINT_HERE
+// --------------------------------------------------------------------------
+const TTR_TEST_MINT =
+  typeof window !== "undefined" && IS_ADMIN
+    ? new URLSearchParams(window.location.search).get("ttrTestMint")
+    : null;
+
+const TTR_TEST_ENABLED = Boolean(TTR_TEST_MINT);
+
+function sameAddr(a, b) {
+  const A = (a || "").toString().trim().toLowerCase();
+  const B = (b || "").toString().trim().toLowerCase();
+  return A && B && A === B;
+}
+
   const svgRef = useRef(null);
-  const renderIdRef = useRef(0); // anti-superposition (annule les rendus async précédents)
-  const [showDebug, setShowDebug] = useState(false);
+  const renderIdRef = useRef(0);
+  const [showDebug, setShowDebug] = useState(process.env.NEXT_PUBLIC_INTERNAL_DEBUG === "1");
 
   const [coinsAll, setCoinsAll] = useState([]);
   const [coins, setCoins] = useState([]);
 
-  const [ttrCap, setTtrCap] = useState(() => {
-    if (typeof window === "undefined") return 1_000_000;
-    try {
-      return Number(localStorage.getItem(LS_TTRCAP)) || 1_000_000;
-    } catch {
-      return 1_000_000;
-    }
-  });
+  const coinsSig = React.useMemo(() => {
+    return (coins || [])
+      .map((c) => {
+        const id = (c?.symbol || c?.name || c?.id || "").toString().toUpperCase();
+        const cap = Math.round(Number(c?.capNum || 0));
+        return `${id}_${cap}`;
+      })
+      .sort()
+      .join("|");
+  }, [coins]);
 
-  const [selectedCoin, setSelectedCoin] = useState(null);
+  const renderKeyRef = useRef("");
+
+  const [ttrCap, setTtrCap] = useState(() => {
+  // RAW TTR cap (can be 0 during FORGING)
+  if (typeof window === "undefined") return 0;
+  try {
+    const v = Number(localStorage.getItem(LS_TTRCAP));
+    return Number.isFinite(v) ? v : 0;
+  } catch {
+    return 0;
+  }
+});
+
+// --------------------------------------------------------------------------
+// TTR caps:
+// - RAW: can be 0 (FORGING) and is the ONLY source for glow/visual activation.
+// - SAFE: used for window math to avoid divide-by-zero & keep the map stable.
+// --------------------------------------------------------------------------
+const TTR_CORE_VALUE = 100_000;
+const TTR_CAP_RAW = Math.max(0, Number(ttrCap || 0));
+const TTR_HAS_GLOW = TTR_CAP_RAW >= TTR_CORE_VALUE;
+
+// When forging (0), keep the world readable by using a "safe" cap for window selection.
+// (Does NOT affect visuals of the core/glow.)
+const TTR_CAP_SAFE = Math.max(1_000_000, TTR_CAP_RAW || 0);
+
+// Only the amount above the core should generate hex materials (rings-only)
+const TTR_CAP_MATS = Math.max(0, TTR_CAP_RAW - (TTR_HAS_GLOW ? TTR_CORE_VALUE : 0));
+const [selectedCoin, setSelectedCoin] = useState(null);
   const [closingInfo, setClosingInfo] = useState(false);
 
   const [legendOpen, setLegendOpen] = useState(false);
@@ -314,25 +459,106 @@ export default function Home() {
   const [dataSource, setDataSource] = useState("Birdeye (loading)");
   const [isMobile, setIsMobile] = useState(false);
 
-  // Pour éviter double-init de StrictMode sur le fetch initial
   const didInitFetch = useRef(false);
 
-  // --- helper : refresh complet (bouton Refresh + timer) ---
-  async function triggerFullRefresh() {
+  // --------------------------------------------------------------------------
+  // Birdeye shared cache / shared promise manager
+  // --------------------------------------------------------------------------
+  const birdeyeMgrRef = useRef({
+    ts: 0,
+    data: null,
+    promise: null,
+    reqId: 0,
+  });
+
+  async function getWindowCoinsManaged({ force = false } = {}) {
+    const mgr = birdeyeMgrRef.current;
+    const now = Date.now();
+
+    const RAM_TTL = 20_000;
+
+    if (!force && mgr.data && mgr.ts && now - mgr.ts < RAM_TTL) {
+      return { ...mgr.data, _reqId: mgr.reqId };
+    }
+
+    if (!force && mgr.promise) {
+      const data = await mgr.promise;
+      return { ...data, _reqId: mgr.reqId };
+    }
+
+    const myReq = ++mgr.reqId;
+
+    mgr.promise = (async () => {
+      const data = await fetchWindowCoins(force);
+      return data;
+    })();
+
     try {
-      const { source, coins } = await fetchWindowCoins();
-      setCoinsAll(dedupeBestByGroup(coins));
-      setDataSource(source);
-      const now = Date.now();
-      if (typeof window !== "undefined") {
-        sessionStorage.setItem(SESSION_CG_DATA, JSON.stringify({ source, coins }));
-        sessionStorage.setItem(SESSION_CG_TIME, String(now));
+      const data = await mgr.promise;
+      if (myReq === mgr.reqId) {
+        mgr.data = data;
+        mgr.ts = Date.now();
       }
-      setLastUpdateUTC(new Date(now).toUTCString().slice(17, 22) + " UTC");
-      setCgOk(true);
+      return { ...data, _reqId: myReq };
+    } finally {
+      if (myReq === mgr.reqId) mgr.promise = null;
+    }
+  }
+
+  function startRefreshCooldown() {
+    lastRefreshAtRef.current = Date.now();
+    setCooldownLeft(Math.ceil(REFRESH_COOLDOWN_MS / 1000));
+
+    if (cooldownTimerRef.current) clearInterval(cooldownTimerRef.current);
+
+    cooldownTimerRef.current = setInterval(() => {
+      const leftMs = REFRESH_COOLDOWN_MS - (Date.now() - lastRefreshAtRef.current);
+      const leftSec = Math.max(0, Math.ceil(leftMs / 1000));
+      setCooldownLeft(leftSec);
+      if (leftSec <= 0) {
+        clearInterval(cooldownTimerRef.current);
+        cooldownTimerRef.current = null;
+      }
+    }, 250);
+  }
+
+  async function triggerFullRefresh() {
+    const since = Date.now() - (lastRefreshAtRef.current || 0);
+    if (refreshing || since < REFRESH_COOLDOWN_MS || cooldownLeft > 0) return;
+
+    setRefreshing(true);
+    startRefreshCooldown();
+
+    try {
+      const { source, coins, _reqId } = await getWindowCoinsManaged({ force: true });
+
+      const mgr = birdeyeMgrRef.current;
+      if (_reqId !== mgr.reqId) return;
+
+      const deduped = dedupeBestByGroup(coins);
+
+      // ✅ important: never overwrite UI with empty
+      if (deduped.length > 0) {
+        setCoinsAll(deduped);
+        setDataSource(source);
+
+        const now = Date.now();
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem(SESSION_CG_DATA, JSON.stringify({ source, coins: deduped }));
+          sessionStorage.setItem(SESSION_CG_TIME, String(now));
+        }
+
+        setLastUpdateUTC(new Date(now).toUTCString().slice(17, 22) + " UTC");
+        setCgOk(true);
+      } else {
+        // keep previous
+        setCgOk(false);
+      }
     } catch (e) {
       console.error(e);
       setCgOk(false);
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -340,15 +566,23 @@ export default function Home() {
   useEffect(() => {
     const onKey = (e) => {
       const k = (e.key || "").toLowerCase();
-      if (k === "d") setShowDebug((v) => !v);
-      if (k === "escape") { setLegendOpen(false); setSelectedCoin(null); }
 
-      // ✅ FIX: T/G change ONLY ttrCap (NO REFRESH) -> no duplication glitch
-      if (k === "t") setTtrCap((v) => Math.round(v * 1.2));
-      if (k === "g") setTtrCap((v) => Math.max(1, Math.round(v / 1.2)));
+      // ✅ Debug toggle + T/G testing only in admin mode (?admin=kingnarwhal24568)
+      if (k === "d" && IS_ADMIN) setShowDebug((v) => !v);
+
+      if (k === "escape") {
+        setLegendOpen(false);
+        setSelectedCoin(null);
+      }
+
+      if (IS_ADMIN) {
+        if (k === "t") setTtrCap((v) => Math.round(v * 1.2));
+        if (k === "g") setTtrCap((v) => Math.max(1, Math.round(v / 1.2)));
+      }
     };
 
-    const onResize = () => setIsMobile(window.innerWidth < 800);
+
+const onResize = () => setIsMobile(window.innerWidth < 800);
     if (typeof window !== "undefined") {
       onResize();
       window.addEventListener("keydown", onKey);
@@ -386,27 +620,49 @@ export default function Home() {
 
         if (!fromTimer && fresh) {
           const parsed = JSON.parse(cached);
-          const list = parsed.coins || parsed;
-          if (!cancelled) {
-            setCoinsAll(dedupeBestByGroup(list));
-            setDataSource(parsed.source || "Birdeye Token List (cache)");
-            setCgOk(true);
-            setLastUpdateUTC(new Date(cachedAt).toUTCString().slice(17, 22) + " UTC");
+          const list = Array.isArray(parsed?.coins)
+            ? parsed.coins
+            : Array.isArray(parsed)
+            ? parsed
+            : [];
+          const deduped = dedupeBestByGroup(list);
+
+          // ✅ important: ignore empty cache (prevents "cache of empty" wiping UI)
+          if (deduped.length > 0) {
+            if (!cancelled) {
+              setCoinsAll(deduped);
+              setDataSource(parsed.source || "Birdeye Token List (cache)");
+              setCgOk(true);
+              setLastUpdateUTC(new Date(cachedAt).toUTCString().slice(17, 22) + " UTC");
+            }
+            return;
           }
-          return;
+          // else: fall through and refetch
         }
 
-        const { source, coins } = await fetchWindowCoins();
+        const { source, coins, _reqId } = await getWindowCoinsManaged({ force: false });
+        const mgr = birdeyeMgrRef.current;
+        if (_reqId !== mgr.reqId) return;
+
         if (!cancelled) {
-          setCoinsAll(dedupeBestByGroup(coins));
-          setDataSource(source);
-          const now = Date.now();
-          if (typeof window !== "undefined") {
-            sessionStorage.setItem(SESSION_CG_DATA, JSON.stringify({ source, coins }));
-            sessionStorage.setItem(SESSION_CG_TIME, String(now));
+          const deduped = dedupeBestByGroup(coins);
+
+          // ✅ never overwrite with empty
+          if (deduped.length > 0) {
+            setCoinsAll(deduped);
+            setDataSource(source);
+
+            const now = Date.now();
+            if (typeof window !== "undefined") {
+              sessionStorage.setItem(SESSION_CG_DATA, JSON.stringify({ source, coins: deduped }));
+              sessionStorage.setItem(SESSION_CG_TIME, String(now));
+            }
+
+            setLastUpdateUTC(new Date(now).toUTCString().slice(17, 22) + " UTC");
+            setCgOk(true);
+          } else {
+            setCgOk(false);
           }
-          setLastUpdateUTC(new Date(now).toUTCString().slice(17, 22) + " UTC");
-          setCgOk(true);
         }
       } catch (e) {
         console.error(e);
@@ -422,15 +678,28 @@ export default function Home() {
     };
   }, []);
 
+
+// --------------------------------------------------------------------------
+// Admin-only: if ttrTestMint is provided, take its REAL market cap from the current window
+// and use it as the TTR cap (so you can validate glow/materials without T/G).
+// --------------------------------------------------------------------------
+useEffect(() => {
+  if (!IS_ADMIN || !TTR_TEST_ENABLED) return;
+  if (!coinsAll || coinsAll.length === 0) return;
+
+  const found =
+    (coinsAll || []).find((c) => sameAddr(c?.id, TTR_TEST_MINT) || sameAddr(c?.address, TTR_TEST_MINT) || sameAddr(c?.mint, TTR_TEST_MINT)) ||
+    null;
+
+  if (found && Number(found?.capNum) > 0) {
+    setTtrCap((prev) => {
+      const next = Math.round(Number(found.capNum) || 0);
+      return prev === next ? prev : next;
+    });
+  }
+}, [IS_ADMIN, TTR_TEST_ENABLED, TTR_TEST_MINT, coinsAll]);
+
   // Fenêtre de 14 cryptos — QUOTAS FIXES autour du TTR (carte lisible, tailles variées)
-  // Répartition demandée:
-  // - 2 coins en dessous du TTR
-  // - 3 coins au même niveau (proches) du TTR
-  // - 6 coins au-dessus du TTR
-  // - 3 coins bien au-dessus (empires rares)
-  //
-  // + Anti micro-caps quand le TTR est haut: floor dynamique
-  // + Fenêtre haute large pour trouver des empires
   useEffect(() => {
     if (!coinsAll || coinsAll.length === 0) {
       setCoins([]);
@@ -441,23 +710,19 @@ export default function Home() {
     const ABS_MAX_CAP = 50_000_000;
 
     const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-    const safeTTR = Math.max(1, Number(ttrCap || 1));
+    const safeTTR = TTR_CAP_SAFE;
 
-    // Floor dynamique: coupe les très petits coins quand le TTR est déjà "gros"
     const FLOOR_RATIO = safeTTR >= 2_000_000 ? 0.5 : 0.0;
     const minCapDyn = Math.max(ABS_MIN_CAP, FLOOR_RATIO > 0 ? safeTTR * FLOOR_RATIO : ABS_MIN_CAP);
 
-    // Fenêtre haute: on autorise des coins bien au-dessus du TTR, clamp 50M (Birdeye)
-    const MAX_ABOVE_RATIO = 2.1; // plafond dur (ex: TTR 3M -> max ~6.3M)
+    const MAX_ABOVE_RATIO = 2.1;
     const maxCapDyn = clamp(Math.max(safeTTR * MAX_ABOVE_RATIO, 2_000_000), ABS_MIN_CAP, ABS_MAX_CAP);
 
-    // 1) Dédoublonnage + cap valide + fenêtre dynamique
     const uniqueAll = dedupeBestByGroup(coinsAll).filter((c) => {
       const cap = Number(c?.capNum ?? 0) || 0;
       return cap > 0 && cap >= minCapDyn && cap <= maxCapDyn;
     });
 
-    // 2) Tri stable par cap croissante
     const byCap = [...uniqueAll].sort((a, b) => {
       const ca = Number(a.capNum ?? 0) || 0;
       const cb = Number(b.capNum ?? 0) || 0;
@@ -499,19 +764,10 @@ export default function Home() {
       }
     }
 
-    // 3) Buckets en ratio cap/TTR + quotas fixes (14)
-    // Ajustables facilement sans toucher au visuel.
     const buckets = [
-      // Below TTR (2)
       { lo: 0.55, hi: 0.95, take: 2, name: "below" },
-
-      // Near TTR (3)
       { lo: 0.95, hi: 1.15, take: 3, name: "near" },
-
-      // Above TTR (6)
       { lo: 1.15, hi: 1.65, take: 6, name: "above" },
-
-      // Far Above / Empires (3) — rares
       { lo: 1.65, hi: 2.10, take: 3, name: "empire" },
     ];
 
@@ -526,7 +782,6 @@ export default function Home() {
 
       const bucket = byCap.filter((c) => {
         const cap = Number(c?.capNum ?? 0) || 0;
-        // Respect strict des côtés
         if (b.name === "below" && cap >= safeTTR) return false;
         if ((b.name === "near" || b.name === "above" || b.name === "empire") && cap < safeTTR && b.name !== "near") return false;
         return cap >= lo && cap < hi;
@@ -535,8 +790,6 @@ export default function Home() {
       takeQuantiles(bucket, b.take);
     }
 
-    // 4) Fallback: si une bande manque de candidats, on complète en priorité dans l'ordre:
-    // empire -> above -> near -> below (pour garder la carte "tirée vers le haut")
     if (selected.length < WINDOW_SIZE) {
       const remaining = byCap.filter((c) => {
         const k = groupKey(c);
@@ -552,14 +805,12 @@ export default function Home() {
       const below = remaining.filter((c) => (Number(c.capNum) || 0) < safeTTR * 0.95);
 
       const need = WINDOW_SIZE - selected.length;
-      // on ajoute en quantiles pour garder de la variété
       takeQuantiles(empire, Math.min(need, 6));
       if (selected.length < WINDOW_SIZE) takeQuantiles(above, Math.min(WINDOW_SIZE - selected.length, 8));
       if (selected.length < WINDOW_SIZE) takeQuantiles(near, Math.min(WINDOW_SIZE - selected.length, 6));
       if (selected.length < WINDOW_SIZE) takeQuantiles(below, Math.min(WINDOW_SIZE - selected.length, 6));
     }
 
-    // dernier filet
     if (selected.length < WINDOW_SIZE) {
       const remaining = byCap.filter((c) => {
         const k = groupKey(c);
@@ -571,8 +822,6 @@ export default function Home() {
       }
     }
 
-    // 5) Enforcement: majorité AU-DESSUS du TTR
-    // Cible: 9/14 >= TTR (6 au-dessus + 3 empires)
     const TARGET_ABOVE = 9;
     const capOf = (c) => Number(c?.capNum ?? 0) || 0;
 
@@ -588,7 +837,7 @@ export default function Home() {
 
       const victims = selected
         .map((c, i) => ({ i, cap: capOf(c) }))
-        .sort((a, b) => a.cap - b.cap); // plus petits d'abord
+        .sort((a, b) => a.cap - b.cap);
 
       let need = TARGET_ABOVE - aboveCount;
       for (const pick of poolAbove) {
@@ -601,7 +850,6 @@ export default function Home() {
       }
     }
 
-    // 6) Diversité: si tout est trop proche, injecte un gros empire
     const caps = selected.map(capOf).filter((v) => v > 0).sort((a, b) => a - b);
     const minC = caps[0] || 0;
     const maxC = caps[caps.length - 1] || 0;
@@ -634,6 +882,11 @@ export default function Home() {
   // ========================================================================
   useEffect(() => {
     if (!mounted) return;
+
+    const renderKey = `${coinsSig}__${Math.round(Number(ttrCap || 0))}__${showDebug ? 1 : 0}__${Number(x).toFixed(4)}__${Number(y).toFixed(4)}`;
+    if (renderKeyRef.current === renderKey) return;
+    renderKeyRef.current = renderKey;
+
     const svgEl = svgRef.current;
     const svg = d3.select(svgEl);
     svg.selectAll("*").remove();
@@ -644,8 +897,10 @@ export default function Home() {
     const width = BASE_W;
     const height = BASE_H;
 
-    const scaleMode = "LARGE"; // forced (TTR always LARGE)
-    const hexRadius = 30; // keep exactly like v9.6
+    const rand = makeSeededRand(renderKey);
+
+    const scaleMode = "LARGE";
+    const hexRadius = 30;
     const hexbin = d3Hexbin().radius(hexRadius);
     const hexWidth = Math.sqrt(3) * hexRadius;
     const hexHeight = 1.5 * hexRadius;
@@ -671,7 +926,6 @@ export default function Home() {
       }
     }
 
-    // Grille hexagonale (fond)
     svg
       .append("g")
       .selectAll("path")
@@ -684,7 +938,6 @@ export default function Home() {
       .attr("stroke", "rgba(255,255,255,0.07)")
       .attr("stroke-width", 0.6);
 
-    // Hex le plus au centre (pour TTR-Core ET safezone)
     const ttrHex = hexList.reduce((prev, curr) =>
       Math.hypot(curr.x - width / 2, curr.y - height / 2) <
       Math.hypot(prev.x - width / 2, prev.y - height / 2)
@@ -694,7 +947,6 @@ export default function Home() {
     const centerXGrid = ttrHex.x;
     const centerYGrid = ttrHex.y;
 
-    // SafeZone
     const baseSize = Math.min(width, height) * SAFEZONE_BASE.scaleGlobal;
     const rectW = baseSize * SAFEZONE_BASE.scaleX;
     const rectH = baseSize * SAFEZONE_BASE.scaleY;
@@ -725,7 +977,6 @@ export default function Home() {
     const rectSafeW = rectW - marginHex * 2;
     const rectSafeH = rectH - marginHex * 2;
 
-    // Debug assert (console) si un hex touche/sort la zone violette
     const DEBUG_SAFE_ASSERT = false;
 
     function pointInSafe(px, py) {
@@ -781,7 +1032,7 @@ export default function Home() {
 
     const palette = d3.schemeTableau10;
     const clusters = [];
-    const occupied = new Set(); // réserve (hex + marge) pour empêcher les clusters de se toucher
+    const occupied = new Set();
 
     function reserveWithBuffer(q, r, radius) {
       for (let dq = -radius; dq <= radius; dq++) {
@@ -806,23 +1057,21 @@ export default function Home() {
 
         let placed = false;
 
-        // --- Placement robuste: centres répartis dans toute la SafeZone (pas seulement proche du centre)
-        // + Stratégie de shrink: si le cluster est trop grand pour rentrer, on réduit progressivement.
         const centerPool = innerCandidates.length ? innerCandidates.slice() : axialValues.slice();
 
-        // Shuffle
         for (let i = centerPool.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
+          const j = Math.floor(rand() * (i + 1));
           const tmp = centerPool[i];
           centerPool[i] = centerPool[j];
           centerPool[j] = tmp;
         }
 
-        // Mix "loin/proche" pour éviter l'alignement et mieux remplir la zone
         centerPool.sort((a, b) => {
           const da = Math.hypot(a.x - centerXGrid, a.y - centerYGrid);
           const db = Math.hypot(b.x - centerXGrid, b.y - centerYGrid);
-          return (Math.random() - 0.5) + (da - db) * 0.00015;
+          const ja = jitterSigned(`${renderKey}|${a.q},${a.r}`) * 0.9;
+          const jb = jitterSigned(`${renderKey}|${b.q},${b.r}`) * 0.9;
+          return (ja - jb) + (da - db) * 0.00015;
         });
 
         const baseSize = Math.min(hexTarget, MAX_HEX_PER_CLUSTER);
@@ -840,7 +1089,6 @@ export default function Home() {
 
           const spiral = genSpiralAxialPositions(size);
 
-          // On essaie beaucoup de centres pour atteindre 14 clusters dans la SafeZone
           const MAX_CENTER_TRIES = Math.min(900, centerPool.length);
 
           for (let ci = 0; ci < MAX_CENTER_TRIES; ci++) {
@@ -867,12 +1115,10 @@ export default function Home() {
                 valid = false;
                 break;
               }
-              // Safe ring autour du TTR
               if (axialDistance(q, r, ttrHex.q, ttrHex.r) < 4) {
                 valid = false;
                 break;
               }
-              // Hard lock safezone
               const corners = hexCorners(h.x, h.y, hexRadius);
               let inside = 0;
               for (const [px, py] of corners) {
@@ -887,13 +1133,15 @@ export default function Home() {
 
             if (!valid) continue;
 
-            // Reserve occupancy WITH buffer (ring around cluster) — une fois validé
             for (const h of hexes) reserveWithBuffer(h.q, h.r, CLUSTER_BUFFER);
 
+            const stableKey = groupKey(p);
+            const stableId = `c${hash32(stableKey)}`;
             clusters.push({
-              id: idx,
+              id: stableId,
+              stableKey,
               ...p,
-              color: palette[idx % palette.length],
+              color: palette[hash32(stableKey) % palette.length],
               hexes,
               centerX: centerCandidate.x,
               centerY: centerCandidate.y,
@@ -905,151 +1153,61 @@ export default function Home() {
         }
 
         if (!placed) {
-          // Hard lock SafeZone : si on ne peut pas placer le cluster proprement,
-          // on le SKIP (plutôt que de le poser hors zone).
-          // console.warn("CLUSTER SKIPPED (no safe space):", p?.symbol || p?.name);
           continue;
         }
       }
     }
 
     (async () => {
-
       // --------------------------------------------------------------------
-// 3) TTR core (halo premium)
+// 1) TTR hex materials (draw AFTER grid & blur, BEFORE clusters)
+// - Core represents the first 100k
+// - Rings (hex materials) start ONLY when cap >= 100k
+// - Rings do NOT include the center hex (so it doesn't double-count the core)
 // --------------------------------------------------------------------
-const defsTTR = svg.append("defs");
+const ttrGroup = svg.append("g").attr("class", "ttr-materials");
 
-// --- Glow filter (blur) ---
-const glow = defsTTR.append("filter").attr("id", "ttr-glow");
-glow.append("feGaussianBlur").attr("stdDeviation", 6).attr("result", "blur");
-const merge = glow.append("feMerge");
-merge.append("feMergeNode").attr("in", "blur");
-merge.append("feMergeNode").attr("in", "SourceGraphic");
+if (TTR_HAS_GLOW && TTR_CAP_MATS > 0) {
+  const ttrMats = computeTtrMaterialsRingsOnly(TTR_CAP_MATS, scaleMode);
+  const ttrSpiral = genSpiralAxialPositions(61).slice(1); // exclude center
 
-// --- Gradient halo (gold -> orange -> violet edge) ---
-const gradTTR = defsTTR
-  .append("radialGradient")
-  .attr("id", "grad-ttr-halo-premium")
-  .attr("cx", "50%")
-  .attr("cy", "50%")
-  .attr("r", "70%");
+  ttrSpiral.forEach(([dq, dr], i) => {
+    const mat = ttrMats[i];
+    if (!mat) return;
 
-gradTTR.append("stop").attr("offset", "0%").attr("stop-color", "#ffffff").attr("stop-opacity", 0.85);
-gradTTR.append("stop").attr("offset", "35%").attr("stop-color", "#ffd36a").attr("stop-opacity", 0.55);
-gradTTR.append("stop").attr("offset", "70%").attr("stop-color", "#ff8a2a").attr("stop-opacity", 0.28);
-gradTTR.append("stop").attr("offset", "100%").attr("stop-color", "#8d7aff").attr("stop-opacity", 0.18);
+    const q = ttrHex.q + dq;
+    const r = ttrHex.r + dr;
+    const h = axialMap.get(keyOf(q, r));
+    if (!h) return;
 
-// --- TTR info (for info panel) ---
-const ttrInfo = {
-  id: "TTR",
-  name: "TTR – War of Coins",
-  symbol: "TTR",
-  capNum: ttrCap,
-  price: "En attente",
-  pct1y: "N/A",
-  pct30: "N/A",
-  pct7: "N/A",
-  pct24: "N/A",
-};
+    ttrGroup
+      .append("path")
+      .attr("d", hexbin.hexagon())
+      .attr("transform", `translate(${h.x},${h.y})`)
+      .attr("fill", "rgba(0,0,0,0)")
+      .attr("stroke", mat.stroke)
+      .attr("stroke-width", 1.25)
+      .attr("opacity", 0.95);
 
-// --- TTR group ---
-const ttr = svg.append("g").attr("class", "ttr-core").style("cursor", "pointer");
+    const ttrHref =
+      mat.key === "copper"
+        ? "/hexacuivre.png"
+        : mat.key === "silver"
+        ? "/hexasilver.png"
+        : mat.key === "gold"
+        ? "/hexagold.png"
+        : "/hexafinal.png";
 
-// BIG soft glow (behind)
-ttr.append("circle")
-  .attr("cx", centerXGrid)
-  .attr("cy", centerYGrid)
-  .attr("r", 74)
-  .attr("fill", "url(#grad-ttr-halo-premium)")
-  .attr("opacity", 0.22)
-  .attr("filter", "url(#ttr-glow)");
-
-// Secondary glow (tighter)
-ttr.append("circle")
-  .attr("cx", centerXGrid)
-  .attr("cy", centerYGrid)
-  .attr("r", 60)
-  .attr("fill", "url(#grad-ttr-halo-premium)")
-  .attr("opacity", 0.22)
-  .attr("filter", "url(#ttr-glow)");
-
-// Thin premium ring
-const ring = ttr.append("circle")
-  .attr("cx", centerXGrid)
-  .attr("cy", centerYGrid)
-  .attr("r", 56)
-  .attr("fill", "none")
-  .attr("stroke", "url(#grad-ttr-halo-premium)")
-  .attr("stroke-width", 3.2)
-  .attr("opacity", 0.78)
-  .attr("filter", "url(#ttr-glow)");
-
-// Inner glass disc
-ttr.append("circle")
-  .attr("cx", centerXGrid)
-  .attr("cy", centerYGrid)
-  .attr("r", 46)
-  .attr("fill", "url(#grad-ttr-halo-premium)")
-  .attr("opacity", 0.18);
-
-// Core image
-ttr.append("image")
-  .attr("xlink:href", "/ttr-core.png")
-  .attr("width", 70)
-  .attr("height", 70)
-  .attr("x", centerXGrid - 35)
-  .attr("y", centerYGrid - 35);
-      // --------------------------------------------------------------------
-      // 1) TTR hex materials (draw AFTER grid & blur, BEFORE clusters)
-      // --------------------------------------------------------------------
-      const ttrMats = computeTtrMaterials(ttrCap, scaleMode);
-      const ttrSpiral = genSpiralAxialPositions(Math.min(ttrMats.length, 61));
-      const ttrGroup = svg.append("g").attr("class", "ttr-materials");
-
-      ttrSpiral.forEach(([dq, dr], i) => {
-  if (i === 0) return; // ✅ skip center hex (no copper on core)
-
-  const mat = ttrMats[i];
-  const q = ttrHex.q + dq;
-  const r = ttrHex.r + dr;
-  const h = axialMap.get(keyOf(q, r));
-  if (!h) return;
-
-  
+    drawHexImage(ttrGroup, ttrHref, h, hexRadius, TTR_IMAGE_SCALE[mat.key] || 1.0);
+  });
+}
 
 
-
-        ttrGroup
-          .append("path")
-          .attr("d", hexbin.hexagon())
-          .attr("transform", `translate(${h.x},${h.y})`)
-          .attr("fill", "rgba(0,0,0,0)")
-          .attr("stroke", mat.stroke)
-          .attr("stroke-width", 1.25)
-          .attr("opacity", 0.95);
-
-        // Overlay the textured hex image (visual scale controlled by TTR_IMAGE_SCALE)
-        const ttrHref = mat.key === "copper"
-          ? "/hexacuivre.png"
-          : mat.key === "silver"
-          ? "/hexasilver.png"
-          : mat.key === "gold"
-          ? "/hexagold.png"
-          : "/hexafinal.png";
-
-        drawHexImage(ttrGroup, ttrHref, h, hexRadius, TTR_IMAGE_SCALE[mat.key] || 1.0);
-      });
-
-      // --------------------------------------------------------------------
-      // 2) Place & draw coin clusters (unchanged logic, just new sizing)
-      // --------------------------------------------------------------------
       if (coins && coins.length > 0) {
         await placeAll();
       }
       if (isStale()) return;
 
-      // Dégradés clusters + respiration + transparence
       const defs = svg.append("defs");
 
       clusters.forEach((c) => {
@@ -1070,7 +1228,7 @@ ttr.append("image")
         const g = svg
           .append("g")
           .attr("class", `cluster-${c.id} cluster-breath`)
-          .style("opacity", 0.80);
+          .style("opacity", 0.65);
 
         c.hexes.forEach((h) => {
           g.append("path")
@@ -1085,8 +1243,8 @@ ttr.append("image")
           .attr("xlink:href", c.logo)
           .attr("width", 48)
           .attr("height", 48)
-          .attr("x", c.centerX - 24)
-          .attr("y", c.centerY - 24)
+          .attr("x", Math.round(c.centerX - 24))
+          .attr("y", Math.round(c.centerY - 24))
           .style("cursor", "pointer")
           .on("click", () => {
             setClosingInfo(false);
@@ -1094,57 +1252,63 @@ ttr.append("image")
           });
       });
 
-      
+      const defsTTR = svg.append("defs");
+      const gradTTR = defsTTR
+        .append("radialGradient")
+        .attr("id", "grad-ttr-halo")
+        .attr("cx", "50%")
+        .attr("cy", "50%")
+        .attr("r", "70%");
+      gradTTR.append("stop").attr("offset", "0%").attr("stop-color", "#e8f7ff").attr("stop-opacity", 0.85);
+      gradTTR.append("stop").attr("offset", "60%").attr("stop-color", "#3bbcff").attr("stop-opacity", 0.50);
+      gradTTR.append("stop").attr("offset", "100%").attr("stop-color", "#1b4fff").attr("stop-opacity", 0.18);
 
-// --- Halo breathing animation (smooth, no CSS needed) ---
-(function pulse() {
-  if (isStale()) return;
-  ring
-    .transition()
-    .duration(1400)
-    .ease(d3.easeSinInOut)
-    .attr("opacity", 0.95)
-    .attr("stroke-width", 3.9)
-    .transition()
-    .duration(1400)
-    .ease(d3.easeSinInOut)
-    .attr("opacity", 0.72)
-    .attr("stroke-width", 3.1)
-    .on("end", pulse);
-})();
+      const ttrInfo = {
+        id: "TTR",
+        name: "TTR – War of Coins",
+        symbol: "TTR",
+        capNum: ttrCap,
+        price: "En attente",
+        pct1y: "N/A",
+        pct30: "N/A",
+        pct7: "N/A",
+        pct24: "N/A",
+      };
 
-// Click -> info panel
-ttr.on("click", () => {
-  setClosingInfo(false);
-  setSelectedCoin(ttrInfo);
-});
-// --- Tiny orbiting sparks (very subtle) ---
-const sparks = ttr.append("g").attr("class", "ttr-sparks").attr("opacity", 0.55);
+      const ttr = svg
+        .append("g")
+        .attr("class", TTR_HAS_GLOW ? "ttr-core ttr-halo-pulse" : "ttr-core")
+        .style("cursor", "pointer");
 
-const sparkData = d3.range(10).map((i) => ({
-  a: (i / 10) * Math.PI * 2,
-  r: 62 + (i % 3) * 3,
-}));
+      ttr.append("circle")
+        .attr("cx", centerXGrid)
+        .attr("cy", centerYGrid)
+        .attr("r", 55)
+        .attr("fill", "none")
+        .attr("stroke", "url(#grad-ttr-halo)")
+        .attr("stroke-width", 4.5)
+        .attr("stroke-opacity", 0.6);
 
-const sparkNodes = sparks.selectAll("circle")
-  .data(sparkData)
-  .enter()
-  .append("circle")
-  .attr("r", 1.6)
-  .attr("fill", "#ffd36a")
-  .attr("filter", "url(#ttr-glow)");
+      ttr.append("circle")
+        .attr("cx", centerXGrid)
+        .attr("cy", centerYGrid)
+        .attr("r", 48)
+        .attr("fill", "url(#grad-ttr-halo)")
+        .attr("opacity", 0.28);
 
-(function orbit() {
-  if (isStale()) return;
-  sparkData.forEach((s) => (s.a += 0.035));
-  sparkNodes
-    .attr("cx", (d) => centerXGrid + Math.cos(d.a) * d.r)
-    .attr("cy", (d) => centerYGrid + Math.sin(d.a) * d.r);
+      ttr.append("image")
+        .attr("xlink:href", TTR_HAS_GLOW ? "/ttr-core-glow.png" : "/ttr-core.png")
+        .attr("width", 70)
+        .attr("height", 70)
+        .attr("x", centerXGrid - 35)
+        .attr("y", centerYGrid - 35);
 
-  d3.timeout(orbit, 40);
-})();
+      ttr.on("click", () => {
+        setClosingInfo(false);
+        setSelectedCoin(ttrInfo);
+      });
     })();
-  }, [mounted, coins, x, y, showDebug, ttrCap]);
+  }, [mounted, coinsSig, x, y, showDebug, ttrCap]);
 
   if (!mounted) {
     return (
@@ -1243,8 +1407,34 @@ const sparkNodes = sparks.selectAll("circle")
         }
         .cluster-breath {
           transform-origin: center center;
+          transform-box: fill-box;
+          will-change: transform, opacity;
+          backface-visibility: hidden;
           animation: clusterBreath 4.8s ease-in-out infinite;
         }
+
+
+/* ✅ TTR halo pulse (only when TTR_HAS_GLOW => class added via D3) */
+@keyframes ttrHaloPulse {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(1);
+    filter: drop-shadow(0 0 6px rgba(80, 190, 255, 0.35))
+            drop-shadow(0 0 14px rgba(40, 140, 255, 0.22));
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(1.06);
+    filter: drop-shadow(0 0 10px rgba(80, 190, 255, 0.55))
+            drop-shadow(0 0 22px rgba(40, 140, 255, 0.35));
+  }
+}
+.ttr-halo-pulse {
+  transform-origin: center center;
+  transform-box: fill-box;
+  will-change: transform, opacity, filter;
+  animation: ttrHaloPulse 4.8s ease-in-out infinite;
+}
 
         /* ✅ NEW: X button gentle animated glow (same spirit as INFO) */
         @keyframes xGlowPulse {
@@ -1510,9 +1700,14 @@ const sparkNodes = sparks.selectAll("circle")
           </div>
           <div>Source: {dataSource}</div>
           <div>Last update: {lastUpdateUTC}</div>
-          <div>TTR: {(ttrCap/1e6).toFixed(2)}M</div>
+          <div>TTR: {(TTR_CAP_RAW/1e6).toFixed(2)}M</div>
+          {IS_ADMIN && TTR_TEST_ENABLED && (
+            <div style={{ opacity: 0.9 }}>TEST MINT: {String(TTR_TEST_MINT).slice(0, 6)}…</div>
+          )}
+
           <button
             onClick={triggerFullRefresh}
+            disabled={refreshing || cooldownLeft > 0}
             style={{
               marginTop: 4,
               background: "rgba(0,0,0,0.35)",
@@ -1520,12 +1715,17 @@ const sparkNodes = sparks.selectAll("circle")
               border: "1px solid rgba(255,255,255,0.25)",
               borderRadius: 6,
               padding: "6px 10px",
-              cursor: "pointer",
+              cursor: refreshing || cooldownLeft > 0 ? "not-allowed" : "pointer",
+              opacity: refreshing || cooldownLeft > 0 ? 0.55 : 1,
               fontFamily: "'Press Start 2P', monospace",
               fontSize: 9,
             }}
           >
-            Refresh Data
+            {refreshing
+              ? "Refreshing…"
+              : cooldownLeft > 0
+              ? `Cooldown ${cooldownLeft}s`
+              : "Refresh Data"}
           </button>
         </div>
 
