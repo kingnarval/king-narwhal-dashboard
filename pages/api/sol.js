@@ -1,14 +1,14 @@
 export default async function handler(req, res) {
   try {
-    const { mint, pool } = req.query;
+    const mint =
+      (req.query.mint && String(req.query.mint)) ||
+      "25ha9xP8oDhFhx9ay6rarbgvLGwDdNqchSX3jQ3mTJD7"; // MANEKI
 
-    // Tu peux appeler /api/sol?mint=...&pool=...
-    // mais pour l’instant on teste juste la réponse Dexscreener.
-    const url = "https://api.dexscreener.com/latest/dex/pairs/solana";
+    const url = `https://api.dexscreener.com/latest/dex/tokens/${mint}`;
 
     const r = await fetch(url, {
       headers: {
-        "accept": "application/json",
+        accept: "application/json",
         "user-agent": "war-of-coins/1.0 (+vercel)",
       },
     });
@@ -27,7 +27,7 @@ export default async function handler(req, res) {
     let data;
     try {
       data = JSON.parse(text);
-    } catch (e) {
+    } catch {
       return res.status(502).json({
         ok: false,
         where: "dexscreener",
@@ -36,7 +36,17 @@ export default async function handler(req, res) {
       });
     }
 
-    return res.status(200).json({ ok: true, data });
+    // Optionnel: renvoyer un format simple
+    const best = data?.pairs?.[0] || null;
+
+    return res.status(200).json({
+      ok: true,
+      mint,
+      priceUsd: best?.priceUsd ? Number(best.priceUsd) : null,
+      pairAddress: best?.pairAddress || null,
+      dexId: best?.dexId || null,
+      raw: data,
+    });
   } catch (e) {
     console.error("API /sol error:", e);
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
