@@ -27,6 +27,7 @@ export default async function handler(req, res) {
       raw: data,
     });
   } catch (e) {
+    console.error("API /sol error:", e);
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 }
