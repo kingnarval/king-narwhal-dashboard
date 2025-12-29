@@ -1,13 +1,14 @@
 // pages/index.js
-// War of Coins – v9.7.8 (Tahlia FINAL PATCH on your stable base)
+// War of Coins – v9.7.9 (Tahlia Raydium MC Patch)
 // Goals:
 // ✅ Keep ALL original UI (border, title, info panel, HUD, refresh button)
 // ✅ Keep hex grid EXACTLY like v9.6 and centered
-// ✅ Keep SafeZone + Debug toggle (D)
-// ✅ FIX: T/G no longer refetch (no duplication glitch)
+// ✅ Keep SafeZone + Debug toggle (D) (admin-only)
+// ✅ FIX: T/G no longer refetch (no duplication glitch) (admin-only)
 // ✅ ADD: TTR hex materials (copper/silver/gold/final) that appear when T/G changes
 // ✅ CHANGE: Other-coin clusters use continuous (organic) sizing OPTION A (slow growth)
 // ✅ Keep: 14-coin window around TTR by market cap (Birdeye via /api/birdeye-window)
+// ✅ NEW: TTR market cap computed like PROD: Raydium v3 price × on-chain supply (/api/ttr-metrics)
 
 "use client";
 /* eslint-disable react-hooks/rules-of-hooks */
@@ -44,6 +45,7 @@ const MAX_HEX_PER_CLUSTER = 19; // dense mode: keeps clusters placeable (max ~2 
 // Sécurité autour des clusters (empêche qu'ils se touchent)
 // 1 = laisse 1 hex de marge, 2 = marge plus grande (peut réduire la place)
 const CLUSTER_BUFFER = 1;
+
 // TTR stocké
 const LS_TTRCAP = "woc_v978_ttr_cap";
 
@@ -54,6 +56,20 @@ const SESSION_CG_TIME = "woc_v978_window_time";
 // SafeZone
 const SAFEZONE_BASE = { scaleX: 2.0, scaleY: 1.13, scaleGlobal: 0.72, radius: 80 };
 const SAFEZONE_OFFSET = { x: 20.5, y: 0 }; // +x = droite, +y = bas
+
+// ============================================================================
+// TTR CONFIG (Raydium → MC). Put REAL values here for prod.
+// - MINT: token mint
+// - QUOTE_MINT: USDC mint (recommended) => price ~ USD
+// ============================================================================
+const TTR_CONFIG = {
+  STATUS: "LIVE", // LIVE | OFF
+  SOURCE: "RAYDIUM",
+  // TODO: put your real mint here (or keep as placeholder for now)
+  MINT: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+  // USDC
+  QUOTE_MINT: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+};
 
 // ============================================================================
 // Helpers
@@ -310,7 +326,6 @@ function computeTtrMaterialsRingsOnly(capMatsUSD, scaleMode) {
   return mats;
 }
 
-
 // ============================================================================
 // Fetch cryptos depuis Birdeye (via API interne /api/birdeye-window)
 // ============================================================================
@@ -384,25 +399,24 @@ export default function Home() {
     typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).get("admin") === "kingnarwhal24568";
 
+  // --------------------------------------------------------------------------
+  // Admin-only TTR test mode:
+  // - Use a real Solana mint from Birdeye window as "fake TTR" (no forcing, real cap).
+  // - Enable via URL (admin required): ?admin=kingnarwhal24568&ttrTestMint=<MINT>
+  // --------------------------------------------------------------------------
+  const TTR_TEST_MINT =
+    typeof window !== "undefined" && IS_ADMIN
+      ? new URLSearchParams(window.location.search).get("ttrTestMint")
+      : null;
 
-// --------------------------------------------------------------------------
-// Admin-only TTR test mode:
-// - Use a real Solana mint from Birdeye window as "fake TTR" (no forcing, real cap).
-// - Enable via URL (admin required): ?admin=kingnarwhal24568&ttrTestMint=<MINT>
-//   Example: &ttrTestMint=MANEKI_MINT_HERE
-// --------------------------------------------------------------------------
-const TTR_TEST_MINT =
-  typeof window !== "undefined" && IS_ADMIN
-    ? new URLSearchParams(window.location.search).get("ttrTestMint")
-    : null;
+  const TTR_TEST_ENABLED = false;
 
-const TTR_TEST_ENABLED = Boolean(TTR_TEST_MINT);
 
-function sameAddr(a, b) {
-  const A = (a || "").toString().trim().toLowerCase();
-  const B = (b || "").toString().trim().toLowerCase();
-  return A && B && A === B;
-}
+  function sameAddr(a, b) {
+    const A = (a || "").toString().trim().toLowerCase();
+    const B = (b || "").toString().trim().toLowerCase();
+    return A && B && A === B;
+  }
 
   const svgRef = useRef(null);
   const renderIdRef = useRef(0);
@@ -425,32 +439,33 @@ function sameAddr(a, b) {
   const renderKeyRef = useRef("");
 
   const [ttrCap, setTtrCap] = useState(() => {
-  // RAW TTR cap (can be 0 during FORGING)
-  if (typeof window === "undefined") return 0;
-  try {
-    const v = Number(localStorage.getItem(LS_TTRCAP));
-    return Number.isFinite(v) ? v : 0;
-  } catch {
-    return 0;
-  }
-});
+    // RAW TTR cap (can be 0 during FORGING)
+    if (typeof window === "undefined") return 0;
+    try {
+      const v = Number(localStorage.getItem(LS_TTRCAP));
+      return Number.isFinite(v) ? v : 0;
+    } catch {
+      return 0;
+    }
+  });
 
-// --------------------------------------------------------------------------
-// TTR caps:
-// - RAW: can be 0 (FORGING) and is the ONLY source for glow/visual activation.
-// - SAFE: used for window math to avoid divide-by-zero & keep the map stable.
-// --------------------------------------------------------------------------
-const TTR_CORE_VALUE = 100_000;
-const TTR_CAP_RAW = Math.max(0, Number(ttrCap || 0));
-const TTR_HAS_GLOW = TTR_CAP_RAW >= TTR_CORE_VALUE;
+  // --------------------------------------------------------------------------
+  // TTR caps:
+  // - RAW: can be 0 (FORGING) and is the ONLY source for glow/visual activation.
+  // - SAFE: used for window math to avoid divide-by-zero & keep the map stable.
+  // --------------------------------------------------------------------------
+  const TTR_CORE_VALUE = 100_000;
+  const TTR_CAP_RAW = Math.max(0, Number(ttrCap || 0));
+  const TTR_HAS_GLOW = TTR_CAP_RAW >= TTR_CORE_VALUE;
 
-// When forging (0), keep the world readable by using a "safe" cap for window selection.
-// (Does NOT affect visuals of the core/glow.)
-const TTR_CAP_SAFE = Math.max(1_000_000, TTR_CAP_RAW || 0);
+  // When forging (0), keep the world readable by using a "safe" cap for window selection.
+  // (Does NOT affect visuals of the core/glow.)
+  const TTR_CAP_SAFE = Math.max(1_000_000, TTR_CAP_RAW || 0);
 
-// Only the amount above the core should generate hex materials (rings-only)
-const TTR_CAP_MATS = Math.max(0, TTR_CAP_RAW - (TTR_HAS_GLOW ? TTR_CORE_VALUE : 0));
-const [selectedCoin, setSelectedCoin] = useState(null);
+  // Only the amount above the core should generate hex materials (rings-only)
+  const TTR_CAP_MATS = Math.max(0, TTR_CAP_RAW - (TTR_HAS_GLOW ? TTR_CORE_VALUE : 0));
+
+  const [selectedCoin, setSelectedCoin] = useState(null);
   const [closingInfo, setClosingInfo] = useState(false);
 
   const [legendOpen, setLegendOpen] = useState(false);
@@ -581,8 +596,7 @@ const [selectedCoin, setSelectedCoin] = useState(null);
       }
     };
 
-
-const onResize = () => setIsMobile(window.innerWidth < 800);
+    const onResize = () => setIsMobile(window.innerWidth < 800);
     if (typeof window !== "undefined") {
       onResize();
       window.addEventListener("keydown", onKey);
@@ -594,7 +608,7 @@ const onResize = () => setIsMobile(window.innerWidth < 800);
         window.removeEventListener("resize", onResize);
       }
     };
-  }, []);
+  }, [IS_ADMIN]);
 
   // Persist TTR
   useEffect(() => {
@@ -678,26 +692,103 @@ const onResize = () => setIsMobile(window.innerWidth < 800);
     };
   }, []);
 
+ // ===============================
+// TTR – Raydium price + on-chain supply
+// ===============================
 
-// --------------------------------------------------------------------------
-// Admin-only: if ttrTestMint is provided, take its REAL market cap from the current window
-// and use it as the TTR cap (so you can validate glow/materials without T/G).
-// --------------------------------------------------------------------------
+const [ttrData, setTtrData] = useState(null);
+const [ttrLoading, setTtrLoading] = useState(false);
+const [ttrError, setTtrError] = useState(null);
+
 useEffect(() => {
-  if (!IS_ADMIN || !TTR_TEST_ENABLED) return;
-  if (!coinsAll || coinsAll.length === 0) return;
+  if (TTR_CONFIG.STATUS !== "LIVE") return;
 
-  const found =
-    (coinsAll || []).find((c) => sameAddr(c?.id, TTR_TEST_MINT) || sameAddr(c?.address, TTR_TEST_MINT) || sameAddr(c?.mint, TTR_TEST_MINT)) ||
-    null;
+  let cancelled = false;
 
-  if (found && Number(found?.capNum) > 0) {
+  async function loadTTR() {
+    try {
+      setTtrLoading(true);
+      setTtrError(null); // ✅ reset à chaque tentative
+
+      const quote =
+        TTR_CONFIG.QUOTE_MINT ||
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC
+
+      const res = await fetch(
+        `/api/ttr-metrics?mint=${encodeURIComponent(
+          TTR_CONFIG.MINT
+        )}&quoteMint=${encodeURIComponent(quote)}`,
+        { cache: "no-store" }
+      );
+
+      const json = await res.json();
+      if (!json?.ok) throw new Error(json?.error || "TTR fetch failed");
+
+      if (cancelled) return;
+
+      // ✅ SUCCESS
+      setTtrData(json);
+
+      // ✅ CRITICAL: inject REAL market cap into the TTR engine
+      if (Number.isFinite(json.marketCap)) {
+        setTtrCap(Math.round(json.marketCap));
+      } else {
+        throw new Error("marketCap missing/invalid");
+      }
+    } catch (e) {
+      if (!cancelled) {
+        setTtrError(e?.message || String(e));
+      }
+    } finally {
+      if (!cancelled) {
+        setTtrLoading(false);
+      }
+    }
+  }
+
+  loadTTR();
+  const timer = setInterval(loadTTR, 20_000); // refresh doux
+
+  return () => {
+    cancelled = true;
+    clearInterval(timer);
+  };
+}, []);
+
+  // ✅ Apply Raydium MC to ttrCap (single source of truth in LIVE)
+  // - Skip if admin is using ttrTestMint (so tests stay predictable)
+  useEffect(() => {
+    if (TTR_CONFIG.STATUS !== "LIVE") return;
+    if (IS_ADMIN && TTR_TEST_ENABLED) return;
+
+    const mc = Number(ttrData?.marketCap ?? 0) || 0;
+    if (mc <= 0) return;
+
     setTtrCap((prev) => {
-      const next = Math.round(Number(found.capNum) || 0);
+      const next = Math.round(mc);
       return prev === next ? prev : next;
     });
-  }
-}, [IS_ADMIN, TTR_TEST_ENABLED, TTR_TEST_MINT, coinsAll]);
+  }, [ttrData, IS_ADMIN, TTR_TEST_ENABLED]);
+
+  // --------------------------------------------------------------------------
+  // Admin-only: if ttrTestMint is provided, take its REAL market cap from the current window
+  // and use it as the TTR cap (so you can validate glow/materials without T/G).
+  // --------------------------------------------------------------------------
+  useEffect(() => {
+    if (!IS_ADMIN || !TTR_TEST_ENABLED) return;
+    if (!coinsAll || coinsAll.length === 0) return;
+
+    const found =
+      (coinsAll || []).find((c) => sameAddr(c?.id, TTR_TEST_MINT) || sameAddr(c?.address, TTR_TEST_MINT) || sameAddr(c?.mint, TTR_TEST_MINT)) ||
+      null;
+
+    if (found && Number(found?.capNum) > 0) {
+      setTtrCap((prev) => {
+        const next = Math.round(Number(found.capNum) || 0);
+        return prev === next ? prev : next;
+      });
+    }
+  }, [IS_ADMIN, TTR_TEST_ENABLED, TTR_TEST_MINT, coinsAll]);
 
   // Fenêtre de 14 cryptos — QUOTAS FIXES autour du TTR (carte lisible, tailles variées)
   useEffect(() => {
@@ -977,8 +1068,6 @@ useEffect(() => {
     const rectSafeW = rectW - marginHex * 2;
     const rectSafeH = rectH - marginHex * 2;
 
-    const DEBUG_SAFE_ASSERT = false;
-
     function pointInSafe(px, py) {
       return (
         px >= rectSafeX &&
@@ -1151,57 +1240,52 @@ useEffect(() => {
             break;
           }
         }
-
-        if (!placed) {
-          continue;
-        }
       }
     }
 
     (async () => {
       // --------------------------------------------------------------------
-// 1) TTR hex materials (draw AFTER grid & blur, BEFORE clusters)
-// - Core represents the first 100k
-// - Rings (hex materials) start ONLY when cap >= 100k
-// - Rings do NOT include the center hex (so it doesn't double-count the core)
-// --------------------------------------------------------------------
-const ttrGroup = svg.append("g").attr("class", "ttr-materials");
+      // 1) TTR hex materials (draw AFTER grid & blur, BEFORE clusters)
+      // - Core represents the first 100k
+      // - Rings (hex materials) start ONLY when cap >= 100k
+      // - Rings do NOT include the center hex (so it doesn't double-count the core)
+      // --------------------------------------------------------------------
+      const ttrGroup = svg.append("g").attr("class", "ttr-materials");
 
-if (TTR_HAS_GLOW && TTR_CAP_MATS > 0) {
-  const ttrMats = computeTtrMaterialsRingsOnly(TTR_CAP_MATS, scaleMode);
-  const ttrSpiral = genSpiralAxialPositions(61).slice(1); // exclude center
+      if (TTR_HAS_GLOW && TTR_CAP_MATS > 0) {
+        const ttrMats = computeTtrMaterialsRingsOnly(TTR_CAP_MATS, scaleMode);
+        const ttrSpiral = genSpiralAxialPositions(61).slice(1); // exclude center
 
-  ttrSpiral.forEach(([dq, dr], i) => {
-    const mat = ttrMats[i];
-    if (!mat) return;
+        ttrSpiral.forEach(([dq, dr], i) => {
+          const mat = ttrMats[i];
+          if (!mat) return;
 
-    const q = ttrHex.q + dq;
-    const r = ttrHex.r + dr;
-    const h = axialMap.get(keyOf(q, r));
-    if (!h) return;
+          const q = ttrHex.q + dq;
+          const r = ttrHex.r + dr;
+          const h = axialMap.get(keyOf(q, r));
+          if (!h) return;
 
-    ttrGroup
-      .append("path")
-      .attr("d", hexbin.hexagon())
-      .attr("transform", `translate(${h.x},${h.y})`)
-      .attr("fill", "rgba(0,0,0,0)")
-      .attr("stroke", mat.stroke)
-      .attr("stroke-width", 1.25)
-      .attr("opacity", 0.95);
+          ttrGroup
+            .append("path")
+            .attr("d", hexbin.hexagon())
+            .attr("transform", `translate(${h.x},${h.y})`)
+            .attr("fill", "rgba(0,0,0,0)")
+            .attr("stroke", mat.stroke)
+            .attr("stroke-width", 1.25)
+            .attr("opacity", 0.95);
 
-    const ttrHref =
-      mat.key === "copper"
-        ? "/hexacuivre.png"
-        : mat.key === "silver"
-        ? "/hexasilver.png"
-        : mat.key === "gold"
-        ? "/hexagold.png"
-        : "/hexafinal.png";
+          const ttrHref =
+            mat.key === "copper"
+              ? "/hexacuivre.png"
+              : mat.key === "silver"
+              ? "/hexasilver.png"
+              : mat.key === "gold"
+              ? "/hexagold.png"
+              : "/hexafinal.png";
 
-    drawHexImage(ttrGroup, ttrHref, h, hexRadius, TTR_IMAGE_SCALE[mat.key] || 1.0);
-  });
-}
-
+          drawHexImage(ttrGroup, ttrHref, h, hexRadius, TTR_IMAGE_SCALE[mat.key] || 1.0);
+        });
+      }
 
       if (coins && coins.length > 0) {
         await placeAll();
@@ -1268,7 +1352,10 @@ if (TTR_HAS_GLOW && TTR_CAP_MATS > 0) {
         name: "TTR – War of Coins",
         symbol: "TTR",
         capNum: ttrCap,
-        price: "En attente",
+        price:
+          ttrData?.price != null
+            ? `$${Number(ttrData.price).toFixed(8)}`
+            : "En attente",
         pct1y: "N/A",
         pct30: "N/A",
         pct7: "N/A",
@@ -1308,7 +1395,7 @@ if (TTR_HAS_GLOW && TTR_CAP_MATS > 0) {
         setSelectedCoin(ttrInfo);
       });
     })();
-  }, [mounted, coinsSig, x, y, showDebug, ttrCap]);
+  }, [mounted, coinsSig, x, y, showDebug, ttrCap, ttrData]);
 
   if (!mounted) {
     return (
@@ -1413,28 +1500,27 @@ if (TTR_HAS_GLOW && TTR_CAP_MATS > 0) {
           animation: clusterBreath 4.8s ease-in-out infinite;
         }
 
-
-/* ✅ TTR halo pulse (only when TTR_HAS_GLOW => class added via D3) */
-@keyframes ttrHaloPulse {
-  0%, 100% {
-    opacity: 0.35;
-    transform: scale(1);
-    filter: drop-shadow(0 0 6px rgba(80, 190, 255, 0.35))
-            drop-shadow(0 0 14px rgba(40, 140, 255, 0.22));
-  }
-  50% {
-    opacity: 0.65;
-    transform: scale(1.06);
-    filter: drop-shadow(0 0 10px rgba(80, 190, 255, 0.55))
-            drop-shadow(0 0 22px rgba(40, 140, 255, 0.35));
-  }
-}
-.ttr-halo-pulse {
-  transform-origin: center center;
-  transform-box: fill-box;
-  will-change: transform, opacity, filter;
-  animation: ttrHaloPulse 4.8s ease-in-out infinite;
-}
+        /* ✅ TTR halo pulse (only when TTR_HAS_GLOW => class added via D3) */
+        @keyframes ttrHaloPulse {
+          0%, 100% {
+            opacity: 0.35;
+            transform: scale(1);
+            filter: drop-shadow(0 0 6px rgba(80, 190, 255, 0.35))
+                    drop-shadow(0 0 14px rgba(40, 140, 255, 0.22));
+          }
+          50% {
+            opacity: 0.65;
+            transform: scale(1.06);
+            filter: drop-shadow(0 0 10px rgba(80, 190, 255, 0.55))
+                    drop-shadow(0 0 22px rgba(40, 140, 255, 0.35));
+          }
+        }
+        .ttr-halo-pulse {
+          transform-origin: center center;
+          transform-box: fill-box;
+          will-change: transform, opacity, filter;
+          animation: ttrHaloPulse 4.8s ease-in-out infinite;
+        }
 
         /* ✅ NEW: X button gentle animated glow (same spirit as INFO) */
         @keyframes xGlowPulse {
@@ -1561,7 +1647,15 @@ if (TTR_HAS_GLOW && TTR_CAP_MATS > 0) {
                       ? `${(selectedCoin.capNum / 1e6).toFixed(2)}M`
                       : "N/A"}
                   </div>
-                  <div>Price: {(!selectedCoin.price || selectedCoin.price === "$0" || selectedCoin.price === "0" || selectedCoin.price === 0) ? "N/A" : selectedCoin.price}</div>
+                  <div>
+                    Price:{" "}
+                    {(!selectedCoin.price ||
+                    selectedCoin.price === "$0" ||
+                    selectedCoin.price === "0" ||
+                    selectedCoin.price === 0)
+                      ? "N/A"
+                      : selectedCoin.price}
+                  </div>
                 </div>
                 <div style={{ marginBottom: 8 }}>Price variation:</div>
                 <div style={{ marginBottom: 6 }}>
@@ -1700,7 +1794,20 @@ if (TTR_HAS_GLOW && TTR_CAP_MATS > 0) {
           </div>
           <div>Source: {dataSource}</div>
           <div>Last update: {lastUpdateUTC}</div>
-          <div>TTR: {(TTR_CAP_RAW/1e6).toFixed(2)}M</div>
+
+          <div>
+            TTR: {(TTR_CAP_RAW / 1e6).toFixed(2)}M
+            {ttrLoading ? " • Raydium…" : ""}
+            {ttrError ? ` • ERR: ${String(ttrError).slice(0, 80)}` : ""}
+
+          </div>
+
+          {ttrData?.price != null && (
+            <div style={{ opacity: 0.9 }}>
+              Price: ${Number(ttrData.price).toFixed(8)}
+            </div>
+          )}
+
           {IS_ADMIN && TTR_TEST_ENABLED && (
             <div style={{ opacity: 0.9 }}>TEST MINT: {String(TTR_TEST_MINT).slice(0, 6)}…</div>
           )}
