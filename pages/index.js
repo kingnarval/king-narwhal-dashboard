@@ -277,6 +277,21 @@ export default function Home() {
   const [lastUpdateUTC, setLastUpdateUTC] = useState("…");
   const [dataSource, setDataSource] = useState("Birdeye (loading)");
   const [isMobile, setIsMobile] = useState(false);
+  const [vw, setVw] = useState(BASE_W);
+  const [vh, setVh] = useState(BASE_H);
+
+  // TEST MODE: make the whole "world" mobile-friendly by fitting BASE_W/H into the phone viewport.
+  // IMPORTANT: declared early so hooks below can depend on it safely.
+  const mobileFitScale = React.useMemo(() => {
+    if (!isMobile) return 1;
+    const w = vw || BASE_W;
+    const h = vh || BASE_H;
+    return Math.min(w / BASE_W, h / BASE_H);
+  }, [isMobile, vw, vh]);
+
+  // On desktop, keep your useGlobalScale() (x,y). On mobile, override with a single fit scale.
+  const worldScaleX = isMobile ? mobileFitScale : x;
+  const worldScaleY = isMobile ? mobileFitScale : y;
 
   // ✅ MOBILE UI FIX (robust): panels are inside a scaled container → we style via [data-info-panel] and center on mobile.
   useEffect(() => {
@@ -419,7 +434,11 @@ export default function Home() {
         setSelectedCoin(null);
       }
     };
-    const onResize = () => setIsMobile(window.innerWidth < 800);
+    const onResize = () => {
+      setIsMobile(window.innerWidth < 800);
+      setVw(window.innerWidth || BASE_W);
+      setVh(window.innerHeight || BASE_H);
+    };
     onResize();
     window.addEventListener("keydown", onKey);
     window.addEventListener("resize", onResize);
@@ -610,7 +629,7 @@ export default function Home() {
   useEffect(() => {
     if (!mounted) return;
 
-    const renderKey = `${coinsSig}__${Math.round(Number(ttrCap || 0))}__${showDebug ? 1 : 0}__${Number(x).toFixed(4)}__${Number(y).toFixed(4)}`;
+    const renderKey = `${coinsSig}__${Math.round(Number(ttrCap || 0))}__${showDebug ? 1 : 0}__${Number(worldScaleX).toFixed(4)}__${Number(worldScaleY).toFixed(4)}`;
     if (renderKeyRef.current === renderKey) return;
     renderKeyRef.current = renderKey;
 
@@ -946,7 +965,7 @@ export default function Home() {
         setSelectedCoin(ttrInfo);
       });
     })();
-  }, [mounted, coinsSig, x, y, showDebug, ttrCap, ttrData, TTR_HAS_GLOW, TTR_CAP_MATS]);
+  }, [mounted, coinsSig, worldScaleX, worldScaleY, showDebug, ttrCap, ttrData, TTR_HAS_GLOW, TTR_CAP_MATS]);
 
   if (!mounted) {
     return (
@@ -1042,7 +1061,7 @@ export default function Home() {
           left: "50%",
           width: BASE_W,
           height: BASE_H,
-          transform: `translate(-50%, -50%) scale(${x}, ${y})`,
+          transform: `translate(-50%, -50%) scale(${worldScaleX}, ${worldScaleY})`,
           transformOrigin: "center center",
           zIndex: 10,
         }}
