@@ -1,5 +1,6 @@
 // pages/index.js
 // War of Coins – v9.7.9 (Tahlia Raydium MC Patch — FULL UI + FORGING + FAIL-SAFE)
+// Patched: ✅ Mobile panels fixed (portal-style overlay outside scaled container + readable text + scroll)
 
 "use client";
 /* eslint-disable react-hooks/rules-of-hooks */
@@ -40,6 +41,7 @@ const DEFAULT_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 // ============================================================================
 // TTR CONFIG (Raydium → MC)
+// =========================================================================YDIUM",
 // ============================================================================
 const TTR_CONFIG = {
   STATUS: "LIVE", // LIVE | OFF
@@ -276,43 +278,45 @@ export default function Home() {
   const [dataSource, setDataSource] = useState("Birdeye (loading)");
   const [isMobile, setIsMobile] = useState(false);
 
-  // ✅ MOBILE UI FIX : Info / Legend panels (à garder ici, dans le vrai Home)
+  // ✅ MOBILE UI FIX (robust): panels are inside a scaled container → we style via [data-info-panel] and center on mobile.
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    // hot-reload safety
+    const prev = document.querySelector('style[data-mobile-ui-fix="true"]');
+    if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
 
     const style = document.createElement("style");
     style.setAttribute("data-mobile-ui-fix", "true");
 
     style.innerHTML = `
       @media (max-width: 768px) {
-        .virgin-border,
-        .info-panel,
-        .info-window,
-        .crypto-info,
-        .panel,
-        [data-info-panel] {
+        /* Panels: fit viewport + readable */
+        [data-info-panel]{
+          position: fixed !important;
+          left: 50% !important;
+          top: 50% !important;
+          transform: translate(-50%, -50%) !important;
           width: min(92vw, 520px) !important;
           max-width: 92vw !important;
           max-height: 78vh !important;
           overflow-y: auto !important;
-          padding: clamp(12px, 3vw, 18px) !important;
+          -webkit-overflow-scrolling: touch !important;
+          box-sizing: border-box !important;
+          z-index: 999999 !important;
         }
 
-        .virgin-border h1,
-        .virgin-border h2,
-        .info-panel h1,
-        .info-panel h2 {
-          font-size: clamp(16px, 4.2vw, 22px) !important;
+        [data-info-panel] *{
+          box-sizing: border-box !important;
+        }
+
+        [data-info-panel] .woc-title{
+          font-size: clamp(16px, 4.4vw, 22px) !important;
           line-height: 1.2 !important;
         }
 
-        .virgin-border p,
-        .virgin-border span,
-        .virgin-border div,
-        .info-panel p,
-        .info-panel span,
-        .info-panel div {
-          font-size: clamp(13px, 3.4vw, 16px) !important;
+        [data-info-panel] .woc-text{
+          font-size: clamp(13px, 3.6vw, 16px) !important;
           line-height: 1.35 !important;
         }
       }
@@ -323,8 +327,6 @@ export default function Home() {
       if (style.parentNode) style.parentNode.removeChild(style);
     };
   }, []);
-
-  // ... (le reste de ton code continue ici, NOTAMMENT ton ttrCap etc.)
 
   const [ttrCap, setTtrCap] = useState(() => {
     if (typeof window === "undefined") return 0;
@@ -980,6 +982,12 @@ export default function Home() {
     }, 300);
   };
 
+  // shared panel sizes (viewport-based, not BASE_W/H)
+  const panelW = isMobile ? "min(92vw, 520px)" : "762px";
+  const panelH = isMobile ? "78vh" : "528px";
+  const legendW = isMobile ? "min(92vw, 640px)" : "900px";
+  const legendH = isMobile ? "78vh" : "680px";
+
   return (
     <div style={{ width: "100vw", height: "100vh", background: "#0c111b", position: "relative", overflow: "hidden" }}>
       <video
@@ -1024,6 +1032,9 @@ export default function Home() {
         }
       `}</style>
 
+      {/* =========================
+          SCALED WORLD (map + border + svg)
+         ========================= */}
       <div
         style={{
           position: "absolute",
@@ -1069,92 +1080,7 @@ export default function Home() {
 
         <svg ref={svgRef} width={BASE_W} height={BASE_H} style={{ position: "absolute", inset: 0, zIndex: 10 }} />
 
-        {/* INFO PANEL */}
-        {selectedCoin && (
-          <>
-            <div onClick={startCloseInfo} style={{ position: "absolute", inset: 0, zIndex: 44, background: "transparent" }} />
-            <div
-              style={{
-                position: "absolute",
-                bottom: "-20px",
-                left: "35%",
-                transform: "translateX(-50%)",
-                width: isMobile ? "90%" : "762px",
-                height: isMobile ? "80%" : "528px",
-                zIndex: 45,
-                fontFamily: "'Press Start 2P', monospace",
-                color: "#ffd87a",
-                textShadow: "0 0 6px rgba(255,215,100,0.6)",
-                display: "flex",
-                justifyContent: "center",
-                alignItems: "center",
-                textAlign: "center",
-                pointerEvents: "auto",
-                animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`,
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <img src="/virgin-border.png" alt="frame" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
-              <div style={{ position: "relative", zIndex: 2, width: isMobile ? "86%" : "80%", fontSize: isMobile ? "12px" : "14px", lineHeight: isMobile ? "22px" : "24px" }}>
-                <div style={{ marginBottom: 20 }}>
-                  <div>Name: {selectedCoin.name}</div>
-                  <div>Mkt Cap: {selectedCoin.capNum > 0 ? `${(selectedCoin.capNum / 1e6).toFixed(2)}M` : "N/A"}</div>
-                  <div>Price: {!selectedCoin.price || selectedCoin.price === "$0" ? "N/A" : selectedCoin.price}</div>
-                </div>
-                <div style={{ marginBottom: 8 }}>Price variation:</div>
-                <div style={{ marginBottom: 6 }}>
-                  1Y: {selectedCoin.pct1y || "N/A"} &nbsp;/&nbsp; 1M: {selectedCoin.pct30 || "N/A"}
-                </div>
-                <div>7D: {selectedCoin.pct7 || "N/A"} &nbsp;/&nbsp; 24H: {selectedCoin.pct24 || "N/A"}</div>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* LEGEND PANEL */}
-        {legendOpen && (
-          <>
-            <div onClick={startCloseLegend} style={{ position: "absolute", inset: 0, zIndex: 44, background: "transparent" }} />
-            <div
-              style={{
-                position: "absolute",
-                top: "16%",
-                left: "27%",
-                transform: "translate(-50%, -50%)",
-                width: isMobile ? "94%" : "900px",
-                height: isMobile ? "88%" : "680px",
-                zIndex: 45,
-                fontFamily: "'Press Start 2P', monospace",
-                color: "#ffd87a",
-                textShadow: "0 0 6px rgba(255,215,100,0.6)",
-                display: "flex",
-                justifyContent: "center",
-                alignItems: "center",
-                textAlign: "left",
-                pointerEvents: "auto",
-                animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`,
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <img src="/virgin-border.png" alt="frame" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
-              <div style={{ position: "relative", zIndex: 2, width: isMobile ? "86%" : "82%", textAlign: "center", fontSize: isMobile ? 5 : 10, lineHeight: isMobile ? "10px" : "18px", transform: "translateY(-10px)" }}>
-                <div style={{ marginBottom: 14, textAlign: "center" }}>
-                  <div style={{ fontSize: isMobile ? 12 : 14 }}>SCALES & LEGEND</div>
-                </div>
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ marginBottom: 6, textDecoration: "underline" }}>CRYPTO CLUSTERS</div>
-                  <div>Organic sizing (continuous) based on market cap.</div>
-                </div>
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ marginBottom: 6, textDecoration: "underline" }}>TTR MATERIALS</div>
-                  <div>Core: 100k — rings: Copper → Silver → Gold → Final</div>
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* HUD bottom-left */}
+        {/* HUD bottom-left (kept inside world so it scales with globalScale like before) */}
         <div
           style={{
             position: "absolute",
@@ -1225,6 +1151,139 @@ export default function Home() {
           <img src="/btn-x.png" alt="X" style={{ width: "100%", height: "100%" }} draggable={false} />
         </a>
       </div>
+
+      {/* =========================
+          OVERLAY PANELS (outside scaled world)
+          Fixes mobile sizing because they are no longer inside transform:scale(...)
+         ========================= */}
+
+      {/* INFO PANEL */}
+      {selectedCoin && (
+        <>
+          <div
+            onClick={startCloseInfo}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 2000,
+              background: "transparent",
+            }}
+          />
+          <div
+            data-info-panel
+            style={{
+              position: "fixed",
+              left: isMobile ? "50%" : "35%",
+              bottom: isMobile ? "auto" : "20px",
+              top: isMobile ? "50%" : "auto",
+              transform: isMobile ? "translate(-50%, -50%)" : "translateX(-50%)",
+              width: panelW,
+              height: panelH,
+              zIndex: 2001,
+              fontFamily: "'Press Start 2P', monospace",
+              color: "#ffd87a",
+              textShadow: "0 0 6px rgba(255,215,100,0.6)",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              textAlign: "center",
+              pointerEvents: "auto",
+              animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img src="/virgin-border.png" alt="frame" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
+            <div
+              className="woc-text"
+              style={{
+                position: "relative",
+                zIndex: 2,
+                width: isMobile ? "86%" : "80%",
+                maxHeight: "calc(100% - 40px)",
+                overflowY: "auto",
+                paddingTop: 6,
+              }}
+            >
+              <div style={{ marginBottom: 18 }}>
+                <div className="woc-title" style={{ marginBottom: 10 }}>INFO</div>
+                <div>Name: {selectedCoin.name}</div>
+                <div>Mkt Cap: {selectedCoin.capNum > 0 ? `${(selectedCoin.capNum / 1e6).toFixed(2)}M` : "N/A"}</div>
+                <div>Price: {!selectedCoin.price || selectedCoin.price === "$0" ? "N/A" : selectedCoin.price}</div>
+              </div>
+
+              <div style={{ marginBottom: 8 }}>Price variation:</div>
+              <div style={{ marginBottom: 6 }}>
+                1Y: {selectedCoin.pct1y || "N/A"} &nbsp;/&nbsp; 1M: {selectedCoin.pct30 || "N/A"}
+              </div>
+              <div>7D: {selectedCoin.pct7 || "N/A"} &nbsp;/&nbsp; 24H: {selectedCoin.pct24 || "N/A"}</div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* LEGEND PANEL */}
+      {legendOpen && (
+        <>
+          <div
+            onClick={startCloseLegend}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 2000,
+              background: "transparent",
+            }}
+          />
+          <div
+            data-info-panel
+            style={{
+              position: "fixed",
+              left: isMobile ? "50%" : "27%",
+              top: isMobile ? "50%" : "16%",
+              transform: isMobile ? "translate(-50%, -50%)" : "translate(-50%, -50%)",
+              width: legendW,
+              height: legendH,
+              zIndex: 2001,
+              fontFamily: "'Press Start 2P', monospace",
+              color: "#ffd87a",
+              textShadow: "0 0 6px rgba(255,215,100,0.6)",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              textAlign: "left",
+              pointerEvents: "auto",
+              animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img src="/virgin-border.png" alt="frame" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
+            <div
+              className="woc-text"
+              style={{
+                position: "relative",
+                zIndex: 2,
+                width: isMobile ? "86%" : "82%",
+                maxHeight: "calc(100% - 40px)",
+                overflowY: "auto",
+                textAlign: "center",
+                transform: "translateY(-10px)",
+                paddingTop: 6,
+              }}
+            >
+              <div style={{ marginBottom: 14, textAlign: "center" }}>
+                <div className="woc-title">SCALES & LEGEND</div>
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ marginBottom: 6, textDecoration: "underline" }}>CRYPTO CLUSTERS</div>
+                <div>Organic sizing (continuous) based on market cap.</div>
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ marginBottom: 6, textDecoration: "underline" }}>TTR MATERIALS</div>
+                <div>Core: 100k — rings: Copper → Silver → Gold → Final</div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
