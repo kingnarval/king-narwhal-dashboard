@@ -258,7 +258,7 @@ export default function Home() {
 
   const IS_ADMIN =
     typeof window !== "undefined" &&
-    new URLSearchParams(window.location.search).get("admin") === "kingnarwhal24568";
+    new URLSearchParams(window.location.search).get("admin") === "kingnarwhal";
 
   const svgRef = useRef(null);
   const renderIdRef = useRef(0);
@@ -275,6 +275,56 @@ export default function Home() {
   const [lastUpdateUTC, setLastUpdateUTC] = useState("…");
   const [dataSource, setDataSource] = useState("Birdeye (loading)");
   const [isMobile, setIsMobile] = useState(false);
+
+  // ✅ MOBILE UI FIX : Info / Legend panels (à garder ici, dans le vrai Home)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const style = document.createElement("style");
+    style.setAttribute("data-mobile-ui-fix", "true");
+
+    style.innerHTML = `
+      @media (max-width: 768px) {
+        .virgin-border,
+        .info-panel,
+        .info-window,
+        .crypto-info,
+        .panel,
+        [data-info-panel] {
+          width: min(92vw, 520px) !important;
+          max-width: 92vw !important;
+          max-height: 78vh !important;
+          overflow-y: auto !important;
+          padding: clamp(12px, 3vw, 18px) !important;
+        }
+
+        .virgin-border h1,
+        .virgin-border h2,
+        .info-panel h1,
+        .info-panel h2 {
+          font-size: clamp(16px, 4.2vw, 22px) !important;
+          line-height: 1.2 !important;
+        }
+
+        .virgin-border p,
+        .virgin-border span,
+        .virgin-border div,
+        .info-panel p,
+        .info-panel span,
+        .info-panel div {
+          font-size: clamp(13px, 3.4vw, 16px) !important;
+          line-height: 1.35 !important;
+        }
+      }
+    `;
+
+    document.head.appendChild(style);
+    return () => {
+      if (style.parentNode) style.parentNode.removeChild(style);
+    };
+  }, []);
+
+  // ... (le reste de ton code continue ici, NOTAMMENT ton ttrCap etc.)
 
   const [ttrCap, setTtrCap] = useState(() => {
     if (typeof window === "undefined") return 0;
