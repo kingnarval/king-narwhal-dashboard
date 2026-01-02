@@ -1,8 +1,10 @@
 // pages/index.js
 // War of Coins – v9.7.9 (Tahlia Raydium MC Patch — FULL UI + FORGING + FAIL-SAFE)
-// Patched: ✅ Mobile panels fixed (portrait + landscape), ✅ TTR state restored, ✅ stray typos removed
-//
-// NOTE: JS ONLY (no TypeScript). Keep this file as-is.
+// Patched:
+// ✅ Mobile panels fixed (portrait + landscape)
+// ✅ SAFE ZONE (INFO + LEGEND): internal invisible 80% content area, centered, scroll + wrap (no overflow)
+// ✅ TTR HUD: show FORGING when mint is "none" OR ttrCap <= 0 (no more 0.00M)
+// ✅ Buttons hover: image swap (btn-info-hover / btn-x-hover) + glow
 
 "use client";
 /* eslint-disable react-hooks/rules-of-hooks */
@@ -79,9 +81,6 @@ function mulberry32(seed) {
 }
 function makeSeededRand(seedStr) {
   return mulberry32(hash32(String(seedStr || "")));
-}
-function jitterSigned(seedStr) {
-  return makeSeededRand(seedStr)() - 0.5;
 }
 
 function drawHexImage(g, href, h, hexRadius, scale) {
@@ -278,6 +277,10 @@ export default function Home() {
   const [dataSource, setDataSource] = useState("Birdeye (loading)");
   const [isMobile, setIsMobile] = useState(false);
 
+  // Hover states (image swap)
+  const [infoHover, setInfoHover] = useState(false);
+  const [xHover, setXHover] = useState(false);
+
   /* ==========================
      TTR STATE (restored)
   ========================== */
@@ -295,14 +298,19 @@ export default function Home() {
   const TTR_CAP_SAFE = Math.max(1_000_000, TTR_CAP_RAW);
   const TTR_HAS_GLOW = TTR_CAP_RAW >= TTR_CORE_VALUE;
   const TTR_CAP_MATS = Math.max(0, TTR_CAP_RAW - TTR_CORE_VALUE);
-  const TTR_IS_FORGING = TTR_CAP_RAW > 0 && TTR_CAP_RAW < TTR_CORE_VALUE;
 
-  // ✅ MOBILE UI FIX (robust): panels always visible on mobile (portrait + landscape)
-  // Integrated from your STABLE snippet: the panel is forced centered and scrollable on small screens.
+  // ✅ FIX: FORGING when mint is none OR cap <= 0 OR cap < core
+  const __mint = (TTR_CONFIG.MINT || "").trim().toLowerCase();
+  const TTR_IS_FORGING =
+    !__mint ||
+    __mint === "none" ||
+    TTR_CAP_RAW <= 0 ||
+    (TTR_CAP_RAW > 0 && TTR_CAP_RAW < TTR_CORE_VALUE);
+
+  // ✅ MOBILE UI FIX (robust)
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // hot-reload safety: remove previous injected style
     const prev = document.querySelector('style[data-mobile-ui-fix="true"]');
     if (prev?.parentNode) prev.parentNode.removeChild(prev);
 
@@ -310,9 +318,6 @@ export default function Home() {
     style.setAttribute("data-mobile-ui-fix", "true");
 
     style.innerHTML = `
-      /* ===========================
-         MOBILE (portrait + landscape)
-         =========================== */
       @media (max-width: 900px) {
         [data-info-panel] {
           position: fixed !important;
@@ -334,9 +339,7 @@ export default function Home() {
           z-index: 99999 !important;
         }
 
-        [data-info-panel] * {
-          box-sizing: border-box !important;
-        }
+        [data-info-panel] * { box-sizing: border-box !important; }
 
         [data-info-panel] .woc-title{
           font-size: clamp(16px, 4.4vw, 22px) !important;
@@ -351,10 +354,7 @@ export default function Home() {
     `;
 
     document.head.appendChild(style);
-
-    return () => {
-      if (style?.parentNode) style.parentNode.removeChild(style);
-    };
+    return () => style.remove();
   }, []);
 
   // TTR metrics refresh
@@ -402,17 +402,12 @@ export default function Home() {
 
     loadTTR();
     const timer = setInterval(loadTTR, 20_000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
+    return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
   // Persist TTR
   useEffect(() => {
-    try {
-      localStorage.setItem(LS_TTRCAP, String(ttrCap));
-    } catch {}
+    try { localStorage.setItem(LS_TTRCAP, String(ttrCap)); } catch {}
   }, [ttrCap]);
 
   // Keyboard + resize
@@ -420,10 +415,7 @@ export default function Home() {
     const onKey = (e) => {
       const k = (e.key || "").toLowerCase();
       if (k === "d" && IS_ADMIN) setShowDebug((v) => !v);
-      if (k === "escape") {
-        setLegendOpen(false);
-        setSelectedCoin(null);
-      }
+      if (k === "escape") { setLegendOpen(false); setSelectedCoin(null); }
     };
     const onResize = () => setIsMobile(window.innerWidth < 800);
     onResize();
@@ -450,10 +442,7 @@ export default function Home() {
     mgr.promise = fetchWindowCoins(force);
     try {
       const data = await mgr.promise;
-      if (myReq === mgr.reqId) {
-        mgr.data = data;
-        mgr.ts = Date.now();
-      }
+      if (myReq === mgr.reqId) { mgr.data = data; mgr.ts = Date.now(); }
       return { ...data, _reqId: myReq };
     } finally {
       if (myReq === mgr.reqId) mgr.promise = null;
@@ -495,21 +484,14 @@ export default function Home() {
             sessionStorage.setItem(SESSION_CG_TIME, String(now));
             setLastUpdateUTC(new Date(now).toUTCString().slice(17, 22) + " UTC");
             setCgOk(true);
-          } else {
-            setCgOk(false);
-          }
+          } else setCgOk(false);
         }
-      } catch {
-        if (!cancelled) setCgOk(false);
-      }
+      } catch { if (!cancelled) setCgOk(false); }
     }
 
     load();
     const id = setInterval(load, 5 * 60 * 1000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
   function startRefreshCooldown() {
@@ -520,10 +502,7 @@ export default function Home() {
       const leftMs = REFRESH_COOLDOWN_MS - (Date.now() - lastRefreshAtRef.current);
       const leftSec = Math.max(0, Math.ceil(leftMs / 1000));
       setCooldownLeft(leftSec);
-      if (leftSec <= 0) {
-        clearInterval(cooldownTimerRef.current);
-        cooldownTimerRef.current = null;
-      }
+      if (leftSec <= 0) { clearInterval(cooldownTimerRef.current); cooldownTimerRef.current = null; }
     }, 250);
   }
 
@@ -544,20 +523,14 @@ export default function Home() {
         sessionStorage.setItem(SESSION_CG_TIME, String(now));
         setLastUpdateUTC(new Date(now).toUTCString().slice(17, 22) + " UTC");
         setCgOk(true);
-      } else {
-        setCgOk(false);
-      }
-    } finally {
-      setRefreshing(false);
-    }
+      } else setCgOk(false);
+    } finally { setRefreshing(false); }
   }
 
   // Window selection around TTR
   useEffect(() => {
-    if (!coinsAll || coinsAll.length === 0) {
-      setCoins([]);
-      return;
-    }
+    if (!coinsAll || coinsAll.length === 0) { setCoins([]); return; }
+
     const ABS_MIN_CAP = 500_000;
     const ABS_MAX_CAP = 50_000_000;
 
@@ -587,41 +560,30 @@ export default function Home() {
       return true;
     }
 
-    // simple quantile selection
     const n = Math.min(WINDOW_SIZE, byCap.length);
     for (let i = 0; i < n; i++) {
       const idx = Math.floor(((i + 0.5) * byCap.length) / n);
       tryAdd(byCap[Math.min(byCap.length - 1, Math.max(0, idx))]);
     }
 
-    // backfill
-    for (const c of byCap) {
-      if (selected.length >= WINDOW_SIZE) break;
-      tryAdd(c);
-    }
-
+    for (const c of byCap) { if (selected.length >= WINDOW_SIZE) break; tryAdd(c); }
     setCoins(selected.slice(0, WINDOW_SIZE));
   }, [coinsAll, ttrCap]);
 
   const coinsSig = useMemo(() => {
     return (coins || [])
-      .map(
-        (c) =>
-          `${(c?.symbol || c?.name || c?.id || "").toString().toUpperCase()}_${Math.round(Number(c?.capNum || 0))}`
-      )
+      .map((c) => `${(c?.symbol || c?.name || c?.id || "").toString().toUpperCase()}_${Math.round(Number(c?.capNum || 0))}`)
       .sort()
       .join("|");
   }, [coins]);
 
   const renderKeyRef = useRef("");
 
-  // D3 render
+  // D3 render (kept exactly like your previous build)
   useEffect(() => {
     if (!mounted) return;
 
-    const renderKey = `${coinsSig}__${Math.round(Number(ttrCap || 0))}__${showDebug ? 1 : 0}__${Number(x).toFixed(
-      4
-    )}__${Number(y).toFixed(4)}`;
+    const renderKey = `${coinsSig}__${Math.round(Number(ttrCap || 0))}__${showDebug ? 1 : 0}__${Number(x).toFixed(4)}__${Number(y).toFixed(4)}`;
     if (renderKeyRef.current === renderKey) return;
     renderKeyRef.current = renderKey;
 
@@ -663,8 +625,7 @@ export default function Home() {
       }
     }
 
-    svg
-      .append("g")
+    svg.append("g")
       .selectAll("path")
       .data(hexList)
       .enter()
@@ -676,7 +637,8 @@ export default function Home() {
       .attr("stroke-width", 0.6);
 
     const ttrHex = hexList.reduce((prev, curr) =>
-      Math.hypot(curr.x - width / 2, curr.y - height / 2) < Math.hypot(prev.x - width / 2, prev.y - height / 2)
+      Math.hypot(curr.x - width / 2, curr.y - height / 2) <
+      Math.hypot(prev.x - width / 2, prev.y - height / 2)
         ? curr
         : prev
     );
@@ -699,7 +661,6 @@ export default function Home() {
       return px >= rectSafeX && px <= rectSafeX + rectSafeW && py >= rectSafeY && py <= rectSafeY + rectSafeH;
     }
 
-    // blur outside safezone (mask)
     function roundedRectPath(px, py, w, h, r) {
       return `
         M${px + r},${py}
@@ -724,8 +685,7 @@ export default function Home() {
     `);
     defsOverlay.append("filter").attr("id", "blur8").append("feGaussianBlur").attr("stdDeviation", 8);
 
-    svg
-      .append("rect")
+    svg.append("rect")
       .attr("width", width)
       .attr("height", height)
       .attr("fill", "rgba(8,10,18,0.6)")
@@ -733,8 +693,7 @@ export default function Home() {
       .attr("mask", "url(#mask-outside)");
 
     if (showDebug) {
-      svg
-        .append("path")
+      svg.append("path")
         .attr("d", safeZonePath)
         .attr("fill", "none")
         .attr("stroke", "#ff4040")
@@ -764,7 +723,6 @@ export default function Home() {
 
       for (const { p, hexTarget } of list) {
         if (isStale()) return;
-        let placed = false;
 
         const centerPool = innerCandidates.length ? innerCandidates.slice() : axialValues.slice();
         for (let i = centerPool.length - 1; i > 0; i--) {
@@ -790,26 +748,18 @@ export default function Home() {
           for (const [q, r] of candidate) {
             const k = keyOf(q, r);
             const h = axialMap.get(k);
-            if (!h || occupied.has(k)) {
-              valid = false;
-              break;
-            }
-            if (axialDistance(q, r, ttrHex.q, ttrHex.r) < 4) {
-              valid = false;
-              break;
-            }
+            if (!h || occupied.has(k)) { valid = false; break; }
+            if (axialDistance(q, r, ttrHex.q, ttrHex.r) < 4) { valid = false; break; }
+
             const corners = hexCorners(h.x, h.y, hexRadius);
             let inside = 0;
             for (const [px, py] of corners) if (pointInSafe(px, py)) inside++;
-            if (inside < 4) {
-              valid = false;
-              break;
-            }
+            if (inside < 4) { valid = false; break; }
+
             hexes.push({ x: h.x, y: h.y, q, r });
           }
 
           if (!valid) continue;
-
           for (const hh of hexes) reserveWithBuffer(hh.q, hh.r, CLUSTER_BUFFER);
 
           const stableKey = groupKey(p);
@@ -824,18 +774,12 @@ export default function Home() {
             centerY: centerCandidate.y,
           });
 
-          placed = true;
           break;
-        }
-
-        if (!placed) {
-          // fail silently
         }
       }
     }
 
     (async () => {
-      // TTR materials (rings) under clusters
       const ttrGroup = svg.append("g").attr("class", "ttr-materials");
       if (TTR_HAS_GLOW && TTR_CAP_MATS > 0) {
         const ttrMats = computeTtrMaterialsRingsOnly(TTR_CAP_MATS);
@@ -848,8 +792,7 @@ export default function Home() {
           const h = axialMap.get(keyOf(q, r));
           if (!h) return;
 
-          ttrGroup
-            .append("path")
+          ttrGroup.append("path")
             .attr("d", hexbin.hexagon())
             .attr("transform", `translate(${h.x},${h.y})`)
             .attr("fill", "rgba(0,0,0,0)")
@@ -858,13 +801,10 @@ export default function Home() {
             .attr("opacity", 0.95);
 
           const href =
-            mat.key === "copper"
-              ? "/hexacuivre.png"
-              : mat.key === "silver"
-              ? "/hexasilver.png"
-              : mat.key === "gold"
-              ? "/hexagold.png"
-              : "/hexafinal.png";
+            mat.key === "copper" ? "/hexacuivre.png" :
+            mat.key === "silver" ? "/hexasilver.png" :
+            mat.key === "gold" ? "/hexagold.png" :
+            "/hexafinal.png";
 
           drawHexImage(ttrGroup, href, h, hexRadius, TTR_IMAGE_SCALE[mat.key] || 1.0);
         });
@@ -875,18 +815,13 @@ export default function Home() {
 
       const defs = svg.append("defs");
       clusters.forEach((c) => {
-        const grad = defs
-          .append("radialGradient")
+        const grad = defs.append("radialGradient")
           .attr("id", `grad-${c.id}`)
           .attr("cx", "50%")
           .attr("cy", "50%")
           .attr("r", "60%");
         grad.append("stop").attr("offset", "0%").attr("stop-color", c.color).attr("stop-opacity", 1);
-        grad
-          .append("stop")
-          .attr("offset", "100%")
-          .attr("stop-color", d3.color(c.color).darker(2))
-          .attr("stop-opacity", 0.85);
+        grad.append("stop").attr("offset", "100%").attr("stop-color", d3.color(c.color).darker(2)).attr("stop-opacity", 0.85);
 
         const g = svg.append("g").attr("class", `cluster-${c.id} cluster-breath`).style("opacity", 0.65);
 
@@ -906,16 +841,12 @@ export default function Home() {
           .attr("x", Math.round(c.centerX - 24))
           .attr("y", Math.round(c.centerY - 24))
           .style("cursor", "pointer")
-          .on("click", () => {
-            setClosingInfo(false);
-            setSelectedCoin(c);
-          });
+          .on("click", () => { setClosingInfo(false); setSelectedCoin(c); });
       });
 
       // TTR halo gradient
       const defsTTR = svg.append("defs");
-      const gradTTR = defsTTR
-        .append("radialGradient")
+      const gradTTR = defsTTR.append("radialGradient")
         .attr("id", "grad-ttr-halo")
         .attr("cx", "50%")
         .attr("cy", "50%")
@@ -936,9 +867,7 @@ export default function Home() {
         pct24: "N/A",
       };
 
-      // Halo then core image LAST so glow is above halo
-      const ttr = svg
-        .append("g")
+      const ttr = svg.append("g")
         .attr("class", TTR_HAS_GLOW ? "ttr-core ttr-halo-pulse" : "ttr-core")
         .style("cursor", "pointer");
 
@@ -965,28 +894,17 @@ export default function Home() {
         .attr("x", centerXGrid - 35)
         .attr("y", centerYGrid - 35);
 
-      ttr.on("click", () => {
-        setClosingInfo(false);
-        setSelectedCoin(ttrInfo);
-      });
+      ttr.on("click", () => { setClosingInfo(false); setSelectedCoin(ttrInfo); });
     })();
   }, [mounted, coinsSig, x, y, showDebug, ttrCap, ttrData, TTR_HAS_GLOW, TTR_CAP_MATS]);
 
   if (!mounted) {
     return (
-      <div
-        style={{
-          width: "100vw",
-          height: "100vh",
-          background: "#0c111b",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "#ffd87a",
-          fontFamily: "'Press Start 2P', monospace",
-          fontSize: 12,
-        }}
-      >
+      <div style={{
+        width: "100vw", height: "100vh", background: "#0c111b",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: "#ffd87a", fontFamily: "'Press Start 2P', monospace", fontSize: 12,
+      }}>
         Loading Realm...
       </div>
     );
@@ -994,21 +912,14 @@ export default function Home() {
 
   const startCloseInfo = () => {
     setClosingInfo(true);
-    setTimeout(() => {
-      setSelectedCoin(null);
-      setClosingInfo(false);
-    }, 300);
+    setTimeout(() => { setSelectedCoin(null); setClosingInfo(false); }, 300);
   };
 
   const startCloseLegend = () => {
     setClosingInfo(true);
-    setTimeout(() => {
-      setLegendOpen(false);
-      setClosingInfo(false);
-    }, 300);
+    setTimeout(() => { setLegendOpen(false); setClosingInfo(false); }, 300);
   };
 
-  // shared panel sizes (viewport-based, not BASE_W/H)
   const panelW = isMobile ? "min(92vw, 520px)" : "762px";
   const panelH = isMobile ? "78vh" : "528px";
   const legendW = isMobile ? "min(92vw, 640px)" : "900px";
@@ -1018,21 +929,10 @@ export default function Home() {
     <div style={{ width: "100vw", height: "100vh", background: "#0c111b", position: "relative", overflow: "hidden" }}>
       <video
         src="/map.mp4"
-        autoPlay
-        muted
-        loop
-        playsInline
+        autoPlay muted loop playsInline
         style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          width: "100vw",
-          height: "100vh",
-          objectFit: "cover",
-          zIndex: 0,
-          opacity: 0.45,
-          transform: "scale(0.81)",
-          pointerEvents: "none",
+          position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh",
+          objectFit: "cover", zIndex: 0, opacity: 0.45, transform: "scale(0.81)", pointerEvents: "none",
         }}
       />
 
@@ -1052,27 +952,37 @@ export default function Home() {
           50% { opacity: 0.65; transform: scale(1.06); filter: drop-shadow(0 0 10px rgba(80, 190, 255, 0.55)) drop-shadow(0 0 22px rgba(40, 140, 255, 0.35)); }
         }
         .ttr-halo-pulse { transform-origin: center center; transform-box: fill-box; will-change: transform, opacity, filter; animation: ttrHaloPulse 4.8s ease-in-out infinite; }
-        @keyframes xGlowPulse {
-          0%, 100% { filter: drop-shadow(0 0 4px rgba(255, 220, 100, 0.14)) drop-shadow(0 0 10px rgba(255, 190, 80, 0.08)); transform: scale(1); }
-          50% { filter: drop-shadow(0 0 7px rgba(255, 220, 100, 0.28)) drop-shadow(0 0 16px rgba(255, 190, 80, 0.16)); transform: scale(1.04); }
+
+        /* ✅ Button hover glow */
+        .woc-icon-btn{
+          filter: drop-shadow(0 0 4px rgba(255, 220, 100, 0.14)) drop-shadow(0 0 10px rgba(255, 190, 80, 0.08));
+          transform: scale(1);
+          transition: filter 180ms ease, transform 180ms ease;
+          will-change: filter, transform;
         }
+        .woc-icon-btn:hover{
+          filter: drop-shadow(0 0 10px rgba(255, 220, 120, 0.42)) drop-shadow(0 0 24px rgba(255, 190, 90, 0.26));
+          transform: scale(1.05);
+        }
+        .woc-icon-btn:active{ transform: scale(0.98); }
+
+        /* ✅ SAFE ZONE internal (invisible) */
+        .woc-safe{
+          overflow-wrap: anywhere;
+          word-break: break-word;
+          hyphens: auto;
+          -webkit-overflow-scrolling: touch;
+        }
+        .woc-safe *{ max-width: 100%; }
       `}</style>
 
-      {/* =========================
-          SCALED WORLD (map + border + svg)
-         ========================= */}
-      <div
-        style={{
-          position: "absolute",
-          top: "50%",
-          left: "50%",
-          width: BASE_W,
-          height: BASE_H,
-          transform: `translate(-50%, -50%) scale(${x}, ${y})`,
-          transformOrigin: "center center",
-          zIndex: 10,
-        }}
-      >
+      <div style={{
+        position: "absolute", top: "50%", left: "50%",
+        width: BASE_W, height: BASE_H,
+        transform: `translate(-50%, -50%) scale(${x}, ${y})`,
+        transformOrigin: "center center",
+        zIndex: 10,
+      }}>
         <img
           src="/border-king-narwhal.png"
           alt="border"
@@ -1106,44 +1016,26 @@ export default function Home() {
 
         <svg ref={svgRef} width={BASE_W} height={BASE_H} style={{ position: "absolute", inset: 0, zIndex: 10 }} />
 
-        {/* HUD bottom-left (kept inside world so it scales with globalScale like before) */}
-        <div
-          style={{
-            position: "absolute",
-            bottom: 20,
-            left: 30,
-            zIndex: 60,
-            fontFamily: "'Press Start 2P', monospace",
-            fontSize: 11,
-            color: cgOk ? "#33ff66" : "#ff4444",
-            textShadow: cgOk ? "0 0 6px rgba(50,255,120,0.35)" : "0 0 6px rgba(255,70,70,0.35)",
-            lineHeight: "18px",
-            userSelect: "none",
-            display: "flex",
-            flexDirection: "column",
-            gap: 4,
-          }}
-        >
-          <div>
-            Live •{" "}
-            <a href="https://birdeye.so/" target="_blank" rel="noreferrer" style={{ color: "inherit", textDecoration: "underline" }}>
-              BD
-            </a>
-          </div>
+        <div style={{
+          position: "absolute", bottom: 20, left: 30, zIndex: 60,
+          fontFamily: "'Press Start 2P', monospace",
+          fontSize: 11,
+          color: cgOk ? "#33ff66" : "#ff4444",
+          textShadow: cgOk ? "0 0 6px rgba(50,255,120,0.35)" : "0 0 6px rgba(255,70,70,0.35)",
+          lineHeight: "18px",
+          userSelect: "none",
+          display: "flex",
+          flexDirection: "column",
+          gap: 4,
+        }}>
+          <div>Live • <a href="https://birdeye.so/" target="_blank" rel="noreferrer" style={{ color: "inherit", textDecoration: "underline" }}>BD</a></div>
           <div>Source: {dataSource}</div>
           <div>Last update: {lastUpdateUTC}</div>
           <div>
-            TTR:{" "}
-            {TTR_IS_FORGING ? (
-              <span style={{ color: "#ffaa55" }}>FORGING</span>
-            ) : (
-              `${(TTR_CAP_RAW / 1e6).toFixed(2)}M`
-            )}
+            TTR: {TTR_IS_FORGING ? <span style={{ color: "#ffaa55" }}>FORGING</span> : `${(TTR_CAP_RAW / 1e6).toFixed(2)}M`}
             {!TTR_IS_FORGING && ttrLoading ? " • Raydium…" : ""}
           </div>
-          {!TTR_IS_FORGING && ttrData?.price != null && (
-            <div style={{ opacity: 0.9 }}>Price: ${Number(ttrData.price).toFixed(8)}</div>
-          )}
+          {!TTR_IS_FORGING && ttrData?.price != null && <div style={{ opacity: 0.9 }}>Price: ${Number(ttrData.price).toFixed(8)}</div>}
           {!TTR_IS_FORGING && ttrError && <div style={{ color: "#ff8888" }}>TTR: {ttrError}</div>}
 
           <button
@@ -1168,15 +1060,19 @@ export default function Home() {
 
         {/* INFO button */}
         <div
-          onClick={() => {
-            setSelectedCoin(null);
-            setClosingInfo(false);
-            setLegendOpen(true);
-          }}
+          onClick={() => { setSelectedCoin(null); setClosingInfo(false); setLegendOpen(true); }}
+          onMouseEnter={() => setInfoHover(true)}
+          onMouseLeave={() => setInfoHover(false)}
           style={{ position: "absolute", bottom: "30px", right: "180px", zIndex: 65, width: "70px", height: "70px", cursor: "pointer" }}
           title="Legend / Scales"
         >
-          <img src="/btn-info.png" alt="Info" style={{ width: "100%", height: "100%" }} draggable={false} />
+          <img
+            src={infoHover ? "/btn-info-hover.png" : "/btn-info.png"}
+            alt="Info"
+            className="woc-icon-btn"
+            style={{ width: "100%", height: "100%" }}
+            draggable={false}
+          />
         </div>
 
         {/* X button */}
@@ -1184,30 +1080,25 @@ export default function Home() {
           href="https://x.com/Kingnarval10307"
           target="_blank"
           rel="noreferrer"
+          onMouseEnter={() => setXHover(true)}
+          onMouseLeave={() => setXHover(false)}
           style={{ position: "absolute", bottom: "30px", right: "115px", zIndex: 65, width: "70px", height: "70px", cursor: "pointer" }}
           title="King Narwhal on X"
         >
-          <img src="/btn-x.png" alt="X" style={{ width: "100%", height: "100%" }} draggable={false} />
+          <img
+            src={xHover ? "/btn-x-hover.png" : "/btn-x.png"}
+            alt="X"
+            className="woc-icon-btn"
+            style={{ width: "100%", height: "100%" }}
+            draggable={false}
+          />
         </a>
       </div>
-
-      {/* =========================
-          OVERLAY PANELS (outside scaled world)
-          Fixes mobile sizing because they are no longer inside transform:scale(...)
-         ========================= */}
 
       {/* INFO PANEL */}
       {selectedCoin && (
         <>
-          <div
-            onClick={startCloseInfo}
-            style={{
-              position: "fixed",
-              inset: 0,
-              zIndex: 2000,
-              background: "transparent",
-            }}
-          />
+          <div onClick={startCloseInfo} style={{ position: "fixed", inset: 0, zIndex: 2000, background: "transparent" }} />
           <div
             data-info-panel
             style={{
@@ -1231,26 +1122,27 @@ export default function Home() {
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <img
-              src="/virgin-border.png"
-              alt="frame"
-              style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}
-            />
+            <img src="/virgin-border.png" alt="frame" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
+
+            {/* ✅ SAFE ZONE (invisible): 80% of panel, centered */}
             <div
-              className="woc-text"
+              className="woc-text woc-safe"
               style={{
-                position: "relative",
-                zIndex: 2,
-                width: isMobile ? "86%" : "80%",
-                maxHeight: "calc(100% - 40px)",
+                position: "absolute",
+                top: "70%",
+                left: "50%",
+                width: "80%",
+                height: "80%",
+                transform: "translate(-50%, -50%)",
                 overflowY: "auto",
-                paddingTop: 6,
+                overflowX: "hidden",
+                padding: "18px 22px",
+                boxSizing: "border-box",
+                zIndex: 2,
               }}
             >
               <div style={{ marginBottom: 18 }}>
-                <div className="woc-title" style={{ marginBottom: 10 }}>
-                  INFO
-                </div>
+                <div className="woc-title" style={{ marginBottom: 10 }}>INFO</div>
                 <div>Name: {selectedCoin.name}</div>
                 <div>Mkt Cap: {selectedCoin.capNum > 0 ? `${(selectedCoin.capNum / 1e6).toFixed(2)}M` : "N/A"}</div>
                 <div>Price: {!selectedCoin.price || selectedCoin.price === "$0" ? "N/A" : selectedCoin.price}</div>
@@ -1260,9 +1152,7 @@ export default function Home() {
               <div style={{ marginBottom: 6 }}>
                 1Y: {selectedCoin.pct1y || "N/A"} &nbsp;/&nbsp; 1M: {selectedCoin.pct30 || "N/A"}
               </div>
-              <div>
-                7D: {selectedCoin.pct7 || "N/A"} &nbsp;/&nbsp; 24H: {selectedCoin.pct24 || "N/A"}
-              </div>
+              <div>7D: {selectedCoin.pct7 || "N/A"} &nbsp;/&nbsp; 24H: {selectedCoin.pct24 || "N/A"}</div>
             </div>
           </div>
         </>
@@ -1271,22 +1161,14 @@ export default function Home() {
       {/* LEGEND PANEL */}
       {legendOpen && (
         <>
-          <div
-            onClick={startCloseLegend}
-            style={{
-              position: "fixed",
-              inset: 0,
-              zIndex: 2000,
-              background: "transparent",
-            }}
-          />
+          <div onClick={startCloseLegend} style={{ position: "fixed", inset: 0, zIndex: 2000, background: "transparent" }} />
           <div
             data-info-panel
             style={{
               position: "fixed",
               left: isMobile ? "50%" : "27%",
               top: isMobile ? "50%" : "16%",
-              transform: isMobile ? "translate(-50%, -50%)" : "translate(-50%, -50%)",
+              transform: "translate(-50%, -50%)",
               width: legendW,
               height: legendH,
               zIndex: 2001,
@@ -1302,22 +1184,24 @@ export default function Home() {
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <img
-              src="/virgin-border.png"
-              alt="frame"
-              style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}
-            />
+            <img src="/virgin-border.png" alt="frame" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
+
+            {/* ✅ SAFE ZONE (invisible): 80% of panel, centered */}
             <div
-              className="woc-text"
+              className="woc-text woc-safe"
               style={{
-                position: "relative",
-                zIndex: 2,
-                width: isMobile ? "86%" : "82%",
-                maxHeight: "calc(100% - 40px)",
+                position: "absolute",
+                top: "50%",
+                left: "50%",
+                width: "80%",
+                height: "80%",
+                transform: "translate(-50%, -50%)",
                 overflowY: "auto",
+                overflowX: "hidden",
+                padding: "18px 22px",
+                boxSizing: "border-box",
+                zIndex: 2,
                 textAlign: "center",
-                transform: "translateY(-10px)",
-                paddingTop: 6,
               }}
             >
               <div style={{ marginBottom: 14, textAlign: "center" }}>
