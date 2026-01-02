@@ -247,18 +247,18 @@ function attachTapHandler(selection, handler) {
   // desktop click
   selection.on("click", (event, d) => {
     // d3 v7 passes event explicitly; keep compatibility
-    if (event) event.preventDefault?.();
+    if (event) event.stopPropagation?.();
     handler(d);
   });
   // mobile touch
   selection.on("touchstart", (event, d) => {
     // prevent ghost click + allow immediate response
-    event.preventDefault?.();
+    event.stopPropagation?.();
     handler(d);
   });
   // pointer (covers many devices)
   selection.on("pointerdown", (event, d) => {
-    event.preventDefault?.();
+    event.stopPropagation?.();
     handler(d);
   });
 }
@@ -358,14 +358,14 @@ export default function Home() {
 
           width: min(92vw, 560px) !important;
           max-width: 92vw !important;
-          height: auto !important;
+          height: 90vh !important;
           max-height: 90vh !important;
 
-          overflow-y: auto !important;
+          overflow: hidden !important;
           -webkit-overflow-scrolling: touch !important;
 
           box-sizing: border-box !important;
-          z-index: 99999 !important;
+          z-index: 999999 !important;
         }
 
         [data-info-panel] * { box-sizing: border-box !important; }
@@ -926,8 +926,10 @@ export default function Home() {
         .attr("x", centerXGrid - 35)
         .attr("y", centerYGrid - 35);
 
-      ttr.on("click", () => { setClosingInfo(false); setSelectedCoin(ttrInfo); });
-    })();
+      ttr.on("click", () => { markPanelOpened(); setClosingInfo(false); setSelectedCoin(ttrInfo); })
+      .on("touchstart", () => { markPanelOpened(); setClosingInfo(false); setSelectedCoin(ttrInfo); })
+      .on("pointerdown", () => { markPanelOpened(); setClosingInfo(false); setSelectedCoin(ttrInfo); });
+})();
   }, [mounted, coinsSig, x, y, showDebug, ttrCap, ttrData, TTR_HAS_GLOW, TTR_CAP_MATS]);
 
   if (!mounted) {
@@ -943,24 +945,45 @@ export default function Home() {
   }
 
   const startCloseInfo = () => {
-    if (Date.now() - (lastPanelOpenAtRef.current || 0) < 450) return;
+    if (Date.now() - (lastPanelOpenAtRef.current || 0) < 250) return;
     setClosingInfo(true);
     setTimeout(() => { setSelectedCoin(null); setClosingInfo(false); }, 300);
   };
 
   const startCloseLegend = () => {
-    if (Date.now() - (lastPanelOpenAtRef.current || 0) < 450) return;
+    if (Date.now() - (lastPanelOpenAtRef.current || 0) < 250) return;
     setClosingInfo(true);
     setTimeout(() => { setLegendOpen(false); setClosingInfo(false); }, 300);
   };
 
-  const panelW = isMobile ? "min(92vw, 520px)" : "762px";
-  const panelH = isMobile ? "78vh" : "528px";
-  const legendW = isMobile ? "min(92vw, 640px)" : "900px";
-  const legendH = isMobile ? "78vh" : "680px";
+  const panelW = "min(92vw, 762px)";
+  const panelH = "min(90vh, 528px)";
+  const legendW = "min(92vw, 900px)";
+  const legendH = "min(90vh, 680px)";
 
   return (
     <div style={{ width: "100vw", height: "100vh", background: "#0c111b", position: "relative", overflow: "hidden" }}>
+
+      {/* DEBUG (auto): shows when panel state is true */}
+      {(selectedCoin || legendOpen) && (
+        <div className="woc-panel-debug" style={{
+          position: "fixed",
+          top: 10,
+          left: 10,
+          zIndex: 1000000,
+          background: "rgba(0,0,0,0.55)",
+          color: "#ffd87a",
+          fontFamily: "'Press Start 2P', monospace",
+          fontSize: 8,
+          padding: "6px 8px",
+          border: "1px solid rgba(255,255,255,0.25)",
+          borderRadius: 6,
+          pointerEvents: "none",
+        }}>
+          PANEL: {selectedCoin ? "INFO" : "LEGEND"}
+        </div>
+      )}
+
       <video
         src="/map.mp4"
         autoPlay muted loop playsInline
@@ -977,8 +1000,8 @@ export default function Home() {
           0%,100% { filter: drop-shadow(0 0 15px rgba(255,200,100,.25)) drop-shadow(0 0 30px rgba(255,160,60,.15)); }
           50% { filter: drop-shadow(0 0 20px rgba(255,210,120,.4)) drop-shadow(0 0 50px rgba(255,180,80,.3)); }
         }
-        @keyframes fadeIn { from { opacity: 0; transform: scale(0.96);} to {opacity:1; transform:scale(1);} }
-        @keyframes fadeOut { from { opacity: 1; transform: scale(1);} to {opacity:0; transform:scale(0.96);} }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
         @keyframes clusterBreath { 0%,100% {transform:scale(1);} 50% {transform:scale(1.035);} }
         .cluster-breath { transform-origin: center center; transform-box: fill-box; will-change: transform, opacity; backface-visibility: hidden; animation: clusterBreath 4.8s ease-in-out infinite; }
         @keyframes ttrHaloPulse {
@@ -1048,7 +1071,7 @@ export default function Home() {
           }}
         />
 
-        <svg ref={svgRef} width={BASE_W} height={BASE_H} style={{ position: "absolute", inset: 0, zIndex: 10, touchAction: "manipulation", pointerEvents: "auto" }} />
+        <svg ref={svgRef} width={BASE_W} height={BASE_H} style={{ position: "absolute", inset: 0, zIndex: 10, touchAction: "manipulation" }} />
 
         <div style={{
           position: "absolute", bottom: 20, left: 30, zIndex: 60,
@@ -1094,10 +1117,7 @@ export default function Home() {
 
         {/* INFO button */}
         <div
-          onPointerDown={(e) => { e.stopPropagation(); markPanelOpened(); setSelectedCoin(null); setClosingInfo(false); setLegendOpen(true); }}
-          onTouchStart={(e) => { e.stopPropagation(); markPanelOpened(); setSelectedCoin(null); setClosingInfo(false); setLegendOpen(true); }}
-          onClick={(e) => { e.stopPropagation(); markPanelOpened(); setSelectedCoin(null); setClosingInfo(false); setLegendOpen(true); }}
-          onMouseEnter={() => setInfoHover(true)}
+          onClick={(e) => { e.stopPropagation(); markPanelOpened(); setSelectedCoin(null); setClosingInfo(false); setLegendOpen(true); }}onMouseEnter={() => setInfoHover(true)}
           onMouseLeave={() => setInfoHover(false)}
           onTouchStart={() => setInfoHover(true)}
           onTouchEnd={() => setInfoHover(false)}
@@ -1122,7 +1142,7 @@ export default function Home() {
           onMouseLeave={() => setXHover(false)}
           onTouchStart={() => setXHover(true)}
           onTouchEnd={() => setXHover(false)}
-          style={{ position: "absolute", bottom: "30px", right: "115px", zIndex: 65, width: "70px", height: "70px", cursor: "pointer", touchAction: "manipulation" }}
+          style={{ position: "absolute", bottom: "30px", right: "115px", zIndex: 65, width: "70px", height: "70px", cursor: "pointer" }}
           title="King Narwhal on X"
         >
           <img
@@ -1135,23 +1155,46 @@ export default function Home() {
         </a>
       </div>
 
+
+      {/* GLOBAL CLICK-CLOSE OVERLAY (closes on ANY click/tap) */}
+      {(selectedCoin || legendOpen) && (
+        <div
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            // Close whatever is open, even if you click inside the panel
+            if (selectedCoin) startCloseInfo();
+            if (legendOpen) startCloseLegend();
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (selectedCoin) startCloseInfo();
+            if (legendOpen) startCloseLegend();
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1000000,
+            background: "transparent",
+            touchAction: "manipulation",
+          }}
+        />
+      )}
       {/* INFO PANEL */}
       {selectedCoin && (
         <>
-          <div onPointerDown={(e) => { e.stopPropagation(); startCloseInfo(); }}
-            onTouchStart={(e) => { e.stopPropagation(); startCloseInfo(); }}
-            onClick={(e) => { e.stopPropagation(); startCloseInfo(); }} style={{ position: "fixed", inset: 0, zIndex: 2000, background: "transparent", touchAction: "manipulation" }} />
           <div
             data-info-panel
             style={{
               position: "fixed",
-              left: isMobile ? "50%" : "35%",
-              bottom: isMobile ? "auto" : "20px",
-              top: isMobile ? "50%" : "auto",
-              transform: isMobile ? "translate(-50%, -50%)" : "translateX(-50%)",
+              left: "50%",
+              bottom: "auto",
+              top: "50%",
+              transform: "translate(-50%, -50%)",
               width: panelW,
               height: panelH,
-              zIndex: 2001,
+              zIndex: 999999,
               fontFamily: "'Press Start 2P', monospace",
               color: "#ffd87a",
               textShadow: "0 0 6px rgba(255,215,100,0.6)",
@@ -1164,6 +1207,10 @@ export default function Home() {
             }}
             onClick={(e) => e.stopPropagation()}
           >
+  <div className="woc-panel-inner" style={{ animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`, width: "100%", height: "100%", position: "relative" }}>
+
+  <div className="woc-panel-inner" style={{ animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`, width: "100%", height: "100%", position: "relative" }}>
+
             <img src="/virgin-border.png" alt="frame" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
 
             {/* ✅ SAFE ZONE (invisible): 80% of panel, centered */}
@@ -1171,7 +1218,7 @@ export default function Home() {
               className="woc-text woc-safe"
               style={{
                 position: "absolute",
-                top: "50%",
+                top: "70%",
                 left: "50%",
                 width: "80%",
                 height: "80%",
@@ -1196,38 +1243,41 @@ export default function Home() {
               </div>
               <div>7D: {selectedCoin.pct7 || "N/A"} &nbsp;/&nbsp; 24H: {selectedCoin.pct24 || "N/A"}</div>
             </div>
-          </div>
+          
+  </div>
+
+  </div>
+</div>
         </>
       )}
 
       {/* LEGEND PANEL */}
       {legendOpen && (
         <>
-          <div onPointerDown={(e) => { e.stopPropagation(); startCloseLegend(); }}
-            onTouchStart={(e) => { e.stopPropagation(); startCloseLegend(); }}
-            onClick={(e) => { e.stopPropagation(); startCloseLegend(); }} style={{ position: "fixed", inset: 0, zIndex: 2000, background: "transparent", touchAction: "manipulation" }} />
           <div
             data-info-panel
             style={{
               position: "fixed",
-              left: isMobile ? "50%" : "27%",
-              top: isMobile ? "50%" : "16%",
+              left: "50%",
+              top: "56%",
               transform: "translate(-50%, -50%)",
               width: legendW,
               height: legendH,
-              zIndex: 2001,
+              zIndex: 999999,
               fontFamily: "'Press Start 2P', monospace",
               color: "#ffd87a",
               textShadow: "0 0 6px rgba(255,215,100,0.6)",
               display: "flex",
               justifyContent: "center",
               alignItems: "center",
-              textAlign: "left",
+              textAlign: "center",
               pointerEvents: "auto",
               animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`,
             }}
             onClick={(e) => e.stopPropagation()}
           >
+  <div className="woc-panel-inner" style={{ animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`, width: "100%", height: "100%", position: "relative" }}>
+
             <img src="/virgin-border.png" alt="frame" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
 
             {/* ✅ SAFE ZONE (invisible): 80% of panel, centered */}
@@ -1235,7 +1285,7 @@ export default function Home() {
               className="woc-text woc-safe"
               style={{
                 position: "absolute",
-                top: "50%",
+                top: "75%",
                 left: "50%",
                 width: "80%",
                 height: "80%",
@@ -1260,7 +1310,9 @@ export default function Home() {
                 <div>Core: 100k — rings: Copper → Silver → Gold → Final</div>
               </div>
             </div>
-          </div>
+          
+  </div>
+</div>
         </>
       )}
     </div>
