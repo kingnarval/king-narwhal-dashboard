@@ -278,78 +278,89 @@ export default function Home() {
   const [dataSource, setDataSource] = useState("Birdeye (loading)");
   const [isMobile, setIsMobile] = useState(false);
 
-  // ✅ MOBILE UI FIX (robust): panels are inside a scaled container → we style via [data-info-panel] and center on mobile.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
+ // ✅ MOBILE UI FIX (robust): panels always visible on mobile (portrait + landscape)
+useEffect(() => {
+  if (typeof window === "undefined") return;
 
-    // hot-reload safety
-    const prev = document.querySelector('style[data-mobile-ui-fix="true"]');
-    if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
+  // hot-reload safety: remove previous injected style
+  const prev = document.querySelector('style[data-mobile-ui-fix="true"]');
+  if (prev?.parentNode) prev.parentNode.removeChild(prev);
 
-    const style = document.createElement("style");
-    style.setAttribute("data-mobile-ui-fix", "true");
+  const style = document.createElement("style");
+  style.setAttribute("data-mobile-ui-fix", "true");
 
-    style.innerHTML = `
-      @media (max-width: 768px) {
-        /* Panels: fit viewport + readable */
-        [data-info-panel]{
-          position: fixed !important;
-          left: 50% !important;
-          top: 50% !important;
-          transform: translate(-50%, -50%) !important;
-          width: min(92vw, 520px) !important;
-          max-width: 92vw !important;
-          max-height: 78vh !important;
-          overflow-y: auto !important;
-          -webkit-overflow-scrolling: touch !important;
-          box-sizing: border-box !important;
-          z-index: 999999 !important;
-        }
+  style.innerHTML = `
+    /* ===========================
+       MOBILE PORTRAIT (default)
+       =========================== */
+    @media (max-width: 768px) {
+      [data-info-panel] {
+        position: fixed !important;
+        top: 50% !important;
+        left: 50% !important;
+        right: auto !important;
+        bottom: auto !important;
+        transform: translate(-50%, -50%) !important;
 
-        [data-info-panel] *{
-          box-sizing: border-box !important;
-        }
+        width: min(92vw, 520px) !important;
+        max-width: 92vw !important;
+        height: auto !important;
+        max-height: 78vh !important;
 
-        [data-info-panel] .woc-title{
-          font-size: clamp(16px, 4.4vw, 22px) !important;
-          line-height: 1.2 !important;
-        }
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch !important;
 
-        [data-info-panel] .woc-text{
-          font-size: clamp(13px, 3.6vw, 16px) !important;
-          line-height: 1.35 !important;
-        }
+        box-sizing: border-box !important;
+        z-index: 99999 !important;
       }
-    `;
 
-    document.head.appendChild(style);
-    return () => {
-      if (style.parentNode) style.parentNode.removeChild(style);
-    };
-  }, []);
+      [data-info-panel] * {
+        box-sizing: border-box !important;
+      }
 
-  const [ttrCap, setTtrCap] = useState(() => {
-    if (typeof window === "undefined") return 0;
-    try {
-      const v = Number(localStorage.getItem(LS_TTRCAP));
-      return Number.isFinite(v) ? v : 0;
-    } catch {
-      return 0;
+      [data-info-panel] .woc-title{
+        font-size: clamp(16px, 4.4vw, 22px) !important;
+        line-height: 1.2 !important;
+      }
+
+      [data-info-panel] .woc-text{
+        font-size: clamp(13px, 3.6vw, 16px) !important;
+        line-height: 1.35 !important;
+      }
     }
-  });
 
-  const [ttrData, setTtrData] = useState(null);
-  const [ttrLoading, setTtrLoading] = useState(false);
-  const [ttrError, setTtrError] = useState(null);
+    /* ===========================
+       MOBILE LANDSCAPE (fix)
+       =========================== */
+    @media (max-width: 900px) and (orientation: landscape) {
+      [data-info-panel] {
+        position: fixed !important;
+        top: 50% !important;
+        left: 50% !important;
+        right: auto !important;
+        bottom: auto !important;
+        transform: translate(-50%, -50%) !important;
 
-  const TTR_CORE_VALUE = 100_000;
-  const TTR_CAP_RAW = Math.max(0, Number(ttrCap || 0));
-  const mintStr = (TTR_CONFIG.MINT || "").toString().trim();
-  const mintMissing = !mintStr || mintStr.toLowerCase() === "none";
-  const TTR_IS_FORGING = TTR_CAP_RAW <= 0 || !!ttrError || mintMissing;
-  const TTR_HAS_GLOW = !TTR_IS_FORGING && TTR_CAP_RAW >= TTR_CORE_VALUE;
-  const TTR_CAP_SAFE = Math.max(1_000_000, TTR_CAP_RAW || 0);
-  const TTR_CAP_MATS = Math.max(0, TTR_CAP_RAW - (TTR_HAS_GLOW ? TTR_CORE_VALUE : 0));
+        width: min(90vw, 560px) !important;
+        max-width: 90vw !important;
+        height: auto !important;
+        max-height: 90vh !important;
+
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+
+        box-sizing: border-box !important;
+        z-index: 99999 !important;
+      }
+    }
+  `;
+
+  document.head.appendChild(style);
+
+  return () => {
+    if (style?.parentNode) style.parentNode.removeChild(style);
+  };
+}, []);
 
   // TTR metrics refresh
   useEffect(() => {
