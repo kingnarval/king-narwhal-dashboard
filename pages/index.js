@@ -1,11 +1,13 @@
 // pages/index.js
 // War of Coins – v9.7.9 (Tahlia Raydium MC Patch — FULL UI + FORGING + FAIL-SAFE)
-// Patched: ✅ Mobile panels fixed (portal-style overlay outside scaled container + readable text + scroll)
+// Patched: ✅ Mobile panels fixed (portrait + landscape), ✅ TTR state restored, ✅ stray typos removed
+//
+// NOTE: JS ONLY (no TypeScript). Keep this file as-is.
 
 "use client";
 /* eslint-disable react-hooks/rules-of-hooks */
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import * as d3 from "d3";
 import { hexbin as d3Hexbin } from "d3-hexbin";
 import { useGlobalScale } from "../useGlobalScale";
@@ -41,7 +43,6 @@ const DEFAULT_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 // ============================================================================
 // TTR CONFIG (Raydium → MC)
-// =========================================================================YDIUM",
 // ============================================================================
 const TTR_CONFIG = {
   STATUS: "LIVE", // LIVE | OFF
@@ -49,6 +50,9 @@ const TTR_CONFIG = {
   MINT: "none",
   QUOTE_MINT: DEFAULT_USDC,
 };
+
+// Core value: forging threshold (USD market cap)
+const TTR_CORE_VALUE = 100_000;
 
 // ============================================================================
 // Helpers
@@ -102,11 +106,7 @@ function normName(c) {
   return s ? s.toUpperCase() : "";
 }
 function groupKey(c) {
-  return (
-    normSym(c) ||
-    normName(c) ||
-    String(c?.id ?? c?.address ?? c?.mint ?? c?.tokenAddress ?? "").trim()
-  );
+  return normSym(c) || normName(c) || String(c?.id ?? c?.address ?? c?.mint ?? c?.tokenAddress ?? "").trim();
 }
 function dedupeBestByGroup(list) {
   const best = new Map();
@@ -278,89 +278,84 @@ export default function Home() {
   const [dataSource, setDataSource] = useState("Birdeye (loading)");
   const [isMobile, setIsMobile] = useState(false);
 
- // ✅ MOBILE UI FIX (robust): panels always visible on mobile (portrait + landscape)
-useEffect(() => {
-  if (typeof window === "undefined") return;
+  /* ==========================
+     TTR STATE (restored)
+  ========================== */
+  const [ttrCap, setTtrCap] = useState(() => {
+    if (typeof window === "undefined") return 0;
+    const v = Number(localStorage.getItem(LS_TTRCAP));
+    return Number.isFinite(v) ? v : 0;
+  });
 
-  // hot-reload safety: remove previous injected style
-  const prev = document.querySelector('style[data-mobile-ui-fix="true"]');
-  if (prev?.parentNode) prev.parentNode.removeChild(prev);
+  const [ttrData, setTtrData] = useState(null);
+  const [ttrLoading, setTtrLoading] = useState(false);
+  const [ttrError, setTtrError] = useState(null);
 
-  const style = document.createElement("style");
-  style.setAttribute("data-mobile-ui-fix", "true");
+  const TTR_CAP_RAW = Math.max(0, ttrCap || 0);
+  const TTR_CAP_SAFE = Math.max(1_000_000, TTR_CAP_RAW);
+  const TTR_HAS_GLOW = TTR_CAP_RAW >= TTR_CORE_VALUE;
+  const TTR_CAP_MATS = Math.max(0, TTR_CAP_RAW - TTR_CORE_VALUE);
+  const TTR_IS_FORGING = TTR_CAP_RAW > 0 && TTR_CAP_RAW < TTR_CORE_VALUE;
 
-  style.innerHTML = `
-    /* ===========================
-       MOBILE PORTRAIT (default)
-       =========================== */
-    @media (max-width: 768px) {
-      [data-info-panel] {
-        position: fixed !important;
-        top: 50% !important;
-        left: 50% !important;
-        right: auto !important;
-        bottom: auto !important;
-        transform: translate(-50%, -50%) !important;
+  // ✅ MOBILE UI FIX (robust): panels always visible on mobile (portrait + landscape)
+  // Integrated from your STABLE snippet: the panel is forced centered and scrollable on small screens.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
 
-        width: min(92vw, 520px) !important;
-        max-width: 92vw !important;
-        height: auto !important;
-        max-height: 78vh !important;
+    // hot-reload safety: remove previous injected style
+    const prev = document.querySelector('style[data-mobile-ui-fix="true"]');
+    if (prev?.parentNode) prev.parentNode.removeChild(prev);
 
-        overflow-y: auto !important;
-        -webkit-overflow-scrolling: touch !important;
+    const style = document.createElement("style");
+    style.setAttribute("data-mobile-ui-fix", "true");
 
-        box-sizing: border-box !important;
-        z-index: 99999 !important;
+    style.innerHTML = `
+      /* ===========================
+         MOBILE (portrait + landscape)
+         =========================== */
+      @media (max-width: 900px) {
+        [data-info-panel] {
+          position: fixed !important;
+          top: 50% !important;
+          left: 50% !important;
+          right: auto !important;
+          bottom: auto !important;
+          transform: translate(-50%, -50%) !important;
+
+          width: min(92vw, 560px) !important;
+          max-width: 92vw !important;
+          height: auto !important;
+          max-height: 90vh !important;
+
+          overflow-y: auto !important;
+          -webkit-overflow-scrolling: touch !important;
+
+          box-sizing: border-box !important;
+          z-index: 99999 !important;
+        }
+
+        [data-info-panel] * {
+          box-sizing: border-box !important;
+        }
+
+        [data-info-panel] .woc-title{
+          font-size: clamp(16px, 4.4vw, 22px) !important;
+          line-height: 1.2 !important;
+        }
+
+        [data-info-panel] .woc-text{
+          font-size: clamp(13px, 3.6vw, 16px) !important;
+          line-height: 1.35 !important;
+        }
       }
+    `;
 
-      [data-info-panel] * {
-        box-sizing: border-box !important;
-      }
+    document.head.appendChild(style);
 
-      [data-info-panel] .woc-title{
-        font-size: clamp(16px, 4.4vw, 22px) !important;
-        line-height: 1.2 !important;
-      }
-
-      [data-info-panel] .woc-text{
-        font-size: clamp(13px, 3.6vw, 16px) !important;
-        line-height: 1.35 !important;
-      }
-    }
-
-    /* ===========================
-       MOBILE LANDSCAPE (fix)
-       =========================== */
-    @media (max-width: 900px) and (orientation: landscape) {
-      [data-info-panel] {
-        position: fixed !important;
-        top: 50% !important;
-        left: 50% !important;
-        right: auto !important;
-        bottom: auto !important;
-        transform: translate(-50%, -50%) !important;
-
-        width: min(90vw, 560px) !important;
-        max-width: 90vw !important;
-        height: auto !important;
-        max-height: 90vh !important;
-
-        overflow-y: auto !important;
-        -webkit-overflow-scrolling: touch !important;
-
-        box-sizing: border-box !important;
-        z-index: 99999 !important;
-      }
-    }
-  `;
-
-  document.head.appendChild(style);
-
-  return () => {
-    if (style?.parentNode) style.parentNode.removeChild(style);
-  };
-}, []);
+    return () => {
+      if (style?.parentNode) style.parentNode.removeChild(style);
+    };
+  }, []);
 
   // TTR metrics refresh
   useEffect(() => {
@@ -608,9 +603,12 @@ useEffect(() => {
     setCoins(selected.slice(0, WINDOW_SIZE));
   }, [coinsAll, ttrCap]);
 
-  const coinsSig = React.useMemo(() => {
+  const coinsSig = useMemo(() => {
     return (coins || [])
-      .map((c) => `${(c?.symbol || c?.name || c?.id || "").toString().toUpperCase()}_${Math.round(Number(c?.capNum || 0))}`)
+      .map(
+        (c) =>
+          `${(c?.symbol || c?.name || c?.id || "").toString().toUpperCase()}_${Math.round(Number(c?.capNum || 0))}`
+      )
       .sort()
       .join("|");
   }, [coins]);
@@ -621,7 +619,9 @@ useEffect(() => {
   useEffect(() => {
     if (!mounted) return;
 
-    const renderKey = `${coinsSig}__${Math.round(Number(ttrCap || 0))}__${showDebug ? 1 : 0}__${Number(x).toFixed(4)}__${Number(y).toFixed(4)}`;
+    const renderKey = `${coinsSig}__${Math.round(Number(ttrCap || 0))}__${showDebug ? 1 : 0}__${Number(x).toFixed(
+      4
+    )}__${Number(y).toFixed(4)}`;
     if (renderKeyRef.current === renderKey) return;
     renderKeyRef.current = renderKey;
 
@@ -663,7 +663,8 @@ useEffect(() => {
       }
     }
 
-    svg.append("g")
+    svg
+      .append("g")
       .selectAll("path")
       .data(hexList)
       .enter()
@@ -675,8 +676,7 @@ useEffect(() => {
       .attr("stroke-width", 0.6);
 
     const ttrHex = hexList.reduce((prev, curr) =>
-      Math.hypot(curr.x - width / 2, curr.y - height / 2) <
-      Math.hypot(prev.x - width / 2, prev.y - height / 2)
+      Math.hypot(curr.x - width / 2, curr.y - height / 2) < Math.hypot(prev.x - width / 2, prev.y - height / 2)
         ? curr
         : prev
     );
@@ -724,7 +724,8 @@ useEffect(() => {
     `);
     defsOverlay.append("filter").attr("id", "blur8").append("feGaussianBlur").attr("stdDeviation", 8);
 
-    svg.append("rect")
+    svg
+      .append("rect")
       .attr("width", width)
       .attr("height", height)
       .attr("fill", "rgba(8,10,18,0.6)")
@@ -732,7 +733,8 @@ useEffect(() => {
       .attr("mask", "url(#mask-outside)");
 
     if (showDebug) {
-      svg.append("path")
+      svg
+        .append("path")
         .attr("d", safeZonePath)
         .attr("fill", "none")
         .attr("stroke", "#ff4040")
@@ -846,7 +848,8 @@ useEffect(() => {
           const h = axialMap.get(keyOf(q, r));
           if (!h) return;
 
-          ttrGroup.append("path")
+          ttrGroup
+            .append("path")
             .attr("d", hexbin.hexagon())
             .attr("transform", `translate(${h.x},${h.y})`)
             .attr("fill", "rgba(0,0,0,0)")
@@ -855,10 +858,13 @@ useEffect(() => {
             .attr("opacity", 0.95);
 
           const href =
-            mat.key === "copper" ? "/hexacuivre.png" :
-            mat.key === "silver" ? "/hexasilver.png" :
-            mat.key === "gold" ? "/hexagold.png" :
-            "/hexafinal.png";
+            mat.key === "copper"
+              ? "/hexacuivre.png"
+              : mat.key === "silver"
+              ? "/hexasilver.png"
+              : mat.key === "gold"
+              ? "/hexagold.png"
+              : "/hexafinal.png";
 
           drawHexImage(ttrGroup, href, h, hexRadius, TTR_IMAGE_SCALE[mat.key] || 1.0);
         });
@@ -869,13 +875,18 @@ useEffect(() => {
 
       const defs = svg.append("defs");
       clusters.forEach((c) => {
-        const grad = defs.append("radialGradient")
+        const grad = defs
+          .append("radialGradient")
           .attr("id", `grad-${c.id}`)
           .attr("cx", "50%")
           .attr("cy", "50%")
           .attr("r", "60%");
         grad.append("stop").attr("offset", "0%").attr("stop-color", c.color).attr("stop-opacity", 1);
-        grad.append("stop").attr("offset", "100%").attr("stop-color", d3.color(c.color).darker(2)).attr("stop-opacity", 0.85);
+        grad
+          .append("stop")
+          .attr("offset", "100%")
+          .attr("stop-color", d3.color(c.color).darker(2))
+          .attr("stop-opacity", 0.85);
 
         const g = svg.append("g").attr("class", `cluster-${c.id} cluster-breath`).style("opacity", 0.65);
 
@@ -903,7 +914,8 @@ useEffect(() => {
 
       // TTR halo gradient
       const defsTTR = svg.append("defs");
-      const gradTTR = defsTTR.append("radialGradient")
+      const gradTTR = defsTTR
+        .append("radialGradient")
         .attr("id", "grad-ttr-halo")
         .attr("cx", "50%")
         .attr("cy", "50%")
@@ -925,7 +937,8 @@ useEffect(() => {
       };
 
       // Halo then core image LAST so glow is above halo
-      const ttr = svg.append("g")
+      const ttr = svg
+        .append("g")
         .attr("class", TTR_HAS_GLOW ? "ttr-core ttr-halo-pulse" : "ttr-core")
         .style("cursor", "pointer");
 
@@ -961,17 +974,19 @@ useEffect(() => {
 
   if (!mounted) {
     return (
-      <div style={{
-        width: "100vw",
-        height: "100vh",
-        background: "#0c111b",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        color: "#ffd87a",
-        fontFamily: "'Press Start 2P', monospace",
-        fontSize: 12,
-      }}>
+      <div
+        style={{
+          width: "100vw",
+          height: "100vh",
+          background: "#0c111b",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "#ffd87a",
+          fontFamily: "'Press Start 2P', monospace",
+          fontSize: 12,
+        }}
+      >
         Loading Realm...
       </div>
     );
@@ -1109,14 +1124,27 @@ useEffect(() => {
             gap: 4,
           }}
         >
-          <div>Live • <a href="https://birdeye.so/" target="_blank" rel="noreferrer" style={{ color: "inherit", textDecoration: "underline" }}>BD</a></div>
+          <div>
+            Live •{" "}
+            <a href="https://birdeye.so/" target="_blank" rel="noreferrer" style={{ color: "inherit", textDecoration: "underline" }}>
+              BD
+            </a>
+          </div>
           <div>Source: {dataSource}</div>
           <div>Last update: {lastUpdateUTC}</div>
           <div>
-            TTR: {TTR_IS_FORGING ? <span style={{ color: "#ffaa55" }}>FORGING</span> : `${(TTR_CAP_RAW / 1e6).toFixed(2)}M`}
+            TTR:{" "}
+            {TTR_IS_FORGING ? (
+              <span style={{ color: "#ffaa55" }}>FORGING</span>
+            ) : (
+              `${(TTR_CAP_RAW / 1e6).toFixed(2)}M`
+            )}
             {!TTR_IS_FORGING && ttrLoading ? " • Raydium…" : ""}
           </div>
-          {!TTR_IS_FORGING && ttrData?.price != null && <div style={{ opacity: 0.9 }}>Price: ${Number(ttrData.price).toFixed(8)}</div>}
+          {!TTR_IS_FORGING && ttrData?.price != null && (
+            <div style={{ opacity: 0.9 }}>Price: ${Number(ttrData.price).toFixed(8)}</div>
+          )}
+          {!TTR_IS_FORGING && ttrError && <div style={{ color: "#ff8888" }}>TTR: {ttrError}</div>}
 
           <button
             onClick={triggerFullRefresh}
@@ -1203,7 +1231,11 @@ useEffect(() => {
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <img src="/virgin-border.png" alt="frame" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
+            <img
+              src="/virgin-border.png"
+              alt="frame"
+              style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+            />
             <div
               className="woc-text"
               style={{
@@ -1216,7 +1248,9 @@ useEffect(() => {
               }}
             >
               <div style={{ marginBottom: 18 }}>
-                <div className="woc-title" style={{ marginBottom: 10 }}>INFO</div>
+                <div className="woc-title" style={{ marginBottom: 10 }}>
+                  INFO
+                </div>
                 <div>Name: {selectedCoin.name}</div>
                 <div>Mkt Cap: {selectedCoin.capNum > 0 ? `${(selectedCoin.capNum / 1e6).toFixed(2)}M` : "N/A"}</div>
                 <div>Price: {!selectedCoin.price || selectedCoin.price === "$0" ? "N/A" : selectedCoin.price}</div>
@@ -1226,7 +1260,9 @@ useEffect(() => {
               <div style={{ marginBottom: 6 }}>
                 1Y: {selectedCoin.pct1y || "N/A"} &nbsp;/&nbsp; 1M: {selectedCoin.pct30 || "N/A"}
               </div>
-              <div>7D: {selectedCoin.pct7 || "N/A"} &nbsp;/&nbsp; 24H: {selectedCoin.pct24 || "N/A"}</div>
+              <div>
+                7D: {selectedCoin.pct7 || "N/A"} &nbsp;/&nbsp; 24H: {selectedCoin.pct24 || "N/A"}
+              </div>
             </div>
           </div>
         </>
@@ -1266,7 +1302,11 @@ useEffect(() => {
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <img src="/virgin-border.png" alt="frame" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
+            <img
+              src="/virgin-border.png"
+              alt="frame"
+              style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+            />
             <div
               className="woc-text"
               style={{
@@ -1294,7 +1334,7 @@ useEffect(() => {
             </div>
           </div>
         </>
-      )}g
+      )}
     </div>
   );
 }
