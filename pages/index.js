@@ -240,6 +240,29 @@ async function fetchWindowCoins(force = false) {
   }
 }
 
+
+// Attach robust tap/click handler (works across iOS Safari / Android / Desktop)
+function attachTapHandler(selection, handler) {
+  if (!selection) return;
+  // desktop click
+  selection.on("click", (event, d) => {
+    // d3 v7 passes event explicitly; keep compatibility
+    if (event) event.preventDefault?.();
+    handler(d);
+  });
+  // mobile touch
+  selection.on("touchstart", (event, d) => {
+    // prevent ghost click + allow immediate response
+    event.preventDefault?.();
+    handler(d);
+  });
+  // pointer (covers many devices)
+  selection.on("pointerdown", (event, d) => {
+    event.preventDefault?.();
+    handler(d);
+  });
+}
+
 // ============================================================================
 // Component
 // ============================================================================
@@ -280,6 +303,12 @@ export default function Home() {
   // Hover states (image swap)
   const [infoHover, setInfoHover] = useState(false);
   const [xHover, setXHover] = useState(false);
+
+  // Prevent "ghost tap" on mobile: modal opens then immediately closes
+  const lastPanelOpenAtRef = useRef(0);
+  const markPanelOpened = () => {
+    lastPanelOpenAtRef.current = Date.now();
+  };
 
   /* ==========================
      TTR STATE (restored)
@@ -840,8 +869,11 @@ export default function Home() {
           .attr("height", 48)
           .attr("x", Math.round(c.centerX - 24))
           .attr("y", Math.round(c.centerY - 24))
-          .style("cursor", "pointer")
-          .on("click", () => { setClosingInfo(false); setSelectedCoin(c); });
+                    .style("cursor", "pointer")
+          .style("pointer-events", "all")
+          ;
+
+        attachTapHandler(g.selectAll("image").filter((dd, ii, nn) => nn[ii] === g.selectAll("image").nodes().slice(-1)[0]), () => { markPanelOpened(); setClosingInfo(false); setSelectedCoin(c); });
       });
 
       // TTR halo gradient
@@ -911,11 +943,13 @@ export default function Home() {
   }
 
   const startCloseInfo = () => {
+    if (Date.now() - (lastPanelOpenAtRef.current || 0) < 450) return;
     setClosingInfo(true);
     setTimeout(() => { setSelectedCoin(null); setClosingInfo(false); }, 300);
   };
 
   const startCloseLegend = () => {
+    if (Date.now() - (lastPanelOpenAtRef.current || 0) < 450) return;
     setClosingInfo(true);
     setTimeout(() => { setLegendOpen(false); setClosingInfo(false); }, 300);
   };
@@ -1014,7 +1048,7 @@ export default function Home() {
           }}
         />
 
-        <svg ref={svgRef} width={BASE_W} height={BASE_H} style={{ position: "absolute", inset: 0, zIndex: 10 }} />
+        <svg ref={svgRef} width={BASE_W} height={BASE_H} style={{ position: "absolute", inset: 0, zIndex: 10, touchAction: "manipulation", pointerEvents: "auto" }} />
 
         <div style={{
           position: "absolute", bottom: 20, left: 30, zIndex: 60,
@@ -1060,10 +1094,14 @@ export default function Home() {
 
         {/* INFO button */}
         <div
-          onClick={() => { setSelectedCoin(null); setClosingInfo(false); setLegendOpen(true); }}
+          onPointerDown={(e) => { e.stopPropagation(); markPanelOpened(); setSelectedCoin(null); setClosingInfo(false); setLegendOpen(true); }}
+          onTouchStart={(e) => { e.stopPropagation(); markPanelOpened(); setSelectedCoin(null); setClosingInfo(false); setLegendOpen(true); }}
+          onClick={(e) => { e.stopPropagation(); markPanelOpened(); setSelectedCoin(null); setClosingInfo(false); setLegendOpen(true); }}
           onMouseEnter={() => setInfoHover(true)}
           onMouseLeave={() => setInfoHover(false)}
-          style={{ position: "absolute", bottom: "30px", right: "180px", zIndex: 65, width: "70px", height: "70px", cursor: "pointer" }}
+          onTouchStart={() => setInfoHover(true)}
+          onTouchEnd={() => setInfoHover(false)}
+          style={{ position: "absolute", bottom: "30px", right: "180px", zIndex: 65, width: "70px", height: "70px", cursor: "pointer", touchAction: "manipulation" }}
           title="Legend / Scales"
         >
           <img
@@ -1082,7 +1120,9 @@ export default function Home() {
           rel="noreferrer"
           onMouseEnter={() => setXHover(true)}
           onMouseLeave={() => setXHover(false)}
-          style={{ position: "absolute", bottom: "30px", right: "115px", zIndex: 65, width: "70px", height: "70px", cursor: "pointer" }}
+          onTouchStart={() => setXHover(true)}
+          onTouchEnd={() => setXHover(false)}
+          style={{ position: "absolute", bottom: "30px", right: "115px", zIndex: 65, width: "70px", height: "70px", cursor: "pointer", touchAction: "manipulation" }}
           title="King Narwhal on X"
         >
           <img
@@ -1098,7 +1138,9 @@ export default function Home() {
       {/* INFO PANEL */}
       {selectedCoin && (
         <>
-          <div onClick={startCloseInfo} style={{ position: "fixed", inset: 0, zIndex: 2000, background: "transparent" }} />
+          <div onPointerDown={(e) => { e.stopPropagation(); startCloseInfo(); }}
+            onTouchStart={(e) => { e.stopPropagation(); startCloseInfo(); }}
+            onClick={(e) => { e.stopPropagation(); startCloseInfo(); }} style={{ position: "fixed", inset: 0, zIndex: 2000, background: "transparent", touchAction: "manipulation" }} />
           <div
             data-info-panel
             style={{
@@ -1129,7 +1171,7 @@ export default function Home() {
               className="woc-text woc-safe"
               style={{
                 position: "absolute",
-                top: "70%",
+                top: "50%",
                 left: "50%",
                 width: "80%",
                 height: "80%",
@@ -1161,7 +1203,9 @@ export default function Home() {
       {/* LEGEND PANEL */}
       {legendOpen && (
         <>
-          <div onClick={startCloseLegend} style={{ position: "fixed", inset: 0, zIndex: 2000, background: "transparent" }} />
+          <div onPointerDown={(e) => { e.stopPropagation(); startCloseLegend(); }}
+            onTouchStart={(e) => { e.stopPropagation(); startCloseLegend(); }}
+            onClick={(e) => { e.stopPropagation(); startCloseLegend(); }} style={{ position: "fixed", inset: 0, zIndex: 2000, background: "transparent", touchAction: "manipulation" }} />
           <div
             data-info-panel
             style={{
