@@ -29,9 +29,28 @@ const TTR_IMAGE_SCALE = {
   final: 1.08,
 };
 
+// TTR material images (unlock / lock)
+// NOTE: put these PNGs in /public with the exact names below.
+const TTR_IMG_UNLOCK = {
+  copper: "/hexacuivre.png",
+  silver: "/hexasilver.png",
+  gold: "/hexagold.png",
+  final: "/hexafinal.png",
+};
+const TTR_IMG_LOCK = {
+  copper: "/hexacuivre-lock.png",
+  silver: "/hexasilver-lock.png",
+  gold: "/hexagold-lock.png",
+  final: "/hexafinal-lock.png",
+};
+
 const WINDOW_SIZE = 14;
+// When TTR is big, reduce the number of OTHER cryptos to free space
+const TTR_DEDENSIFY_CAP = 10_000_000; // 10M
+const WINDOW_SIZE_DEDENSED = 10;      // 1 TTR + 9 others (removes 4)
+
 const MAX_TRIES_PER_CLUSTER = 1200;
-const MAX_HEX_PER_CLUSTER = 19;
+const MAX_HEX_PER_CLUSTER = 37; // 3 crowns (center + 6 + 12 + 18)
 const CLUSTER_BUFFER = 1;
 
 const LS_TTRCAP = "woc_v978_ttr_cap";
@@ -42,7 +61,7 @@ const SAFEZONE_BASE = { scaleX: 2.0, scaleY: 1.13, scaleGlobal: 0.72, radius: 80
 const SAFEZONE_OFFSET = { x: 20.5, y: 0 };
 
 const DEFAULT_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-
+const DEFAULT_WSOL = "So11111111111111111111111111111111111111112";
 // ============================================================================
 // TTR CONFIG (Raydium → MC)
 // ============================================================================
@@ -50,16 +69,156 @@ const TTR_CONFIG = {
   STATUS: "LIVE", // LIVE | OFF
   SOURCE: "RAYDIUM",
   MINT: "none",
-  QUOTE_MINT: DEFAULT_USDC,
+  QUOTE_MINT: DEFAULT_WSOL,
 };
+
+
+// ============================================================================
+// PRE-LAUNCH MODE (FIXED LIST)
+// Shows a fixed list of 14 tokens while TTR market cap is below the threshold.
+// ============================================================================
+const PRELAUNCH_TTR_THRESHOLD = 1_100_000;
+const PRELAUNCH_TARGET_COUNT = 14;
+
+const PRELAUNCH_MINTS = [
+  "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
+  "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+  "WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk",
+  "ukHH6c7mMyiWCf1b9pnWe25TSpkDDt3H5pQZgZ74J82",
+  "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",
+  "HhJpBhRRn4g56VsyLuT8DL5Bv31HkXqsrahTTUCZeZg4",
+  "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+  "5z3EqYQo9HiCEs3R84RCDMu2n7anpDMxRhdK8PSWmrRC",
+  "8HGyAAB1yoM1ttS7pXjHMa3dukTFGQggnFFH3hJZgzQh",
+  "AZsHEMXd36Bj1EMNXhowJajpUXzrKcK57wW4ZGXVa7yR",
+  "7iT1GRYYhEop2nV1dyCwK2MGyLmPHq47WhPGSwiqcUg5",
+  "DUSTawucrTsGU8hcqRdHDCbuYhCPADMLM2VcCb8VnFnQ",
+  "9999FVbjHioTcoJpoBiSjpxHW6xEn3witVuXKqBh2RFQ",
+  "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+];
+
+const PRELAUNCH_MIN_MC = 1_000_000;
+const PRELAUNCH_MAX_MC = 10_000_000;
+
+function pickPrelaunchCoins(coinsAll) {
+  const byAddr = new Map();
+  for (const c of (coinsAll || [])) {
+    if (c?.addr) byAddr.set(c.addr, c);
+  }
+
+  const pool = PRELAUNCH_MINTS
+    .map((m) => byAddr.get(m))
+    .filter(Boolean)
+    .filter((c) => Number.isFinite(Number(c?.capNum)) && Number(c.capNum) > 0);
+
+  const inRange = pool.filter(
+    (c) => Number(c.capNum) >= PRELAUNCH_MIN_MC && Number(c.capNum) <= PRELAUNCH_MAX_MC
+  );
+
+  const mid = (PRELAUNCH_MIN_MC + PRELAUNCH_MAX_MC) / 2;
+  const outRange = pool
+    .filter((c) => Number(c.capNum) < PRELAUNCH_MIN_MC || Number(c.capNum) > PRELAUNCH_MAX_MC)
+    .sort((a, b) => Math.abs(Number(a.capNum) - mid) - Math.abs(Number(b.capNum) - mid));
+
+  const picked = [...inRange, ...outRange].slice(0, PRELAUNCH_TARGET_COUNT);
+  picked.sort((a, b) => Number(b.capNum) - Number(a.capNum));
+  return picked;
+}
+
+function pickPrelaunchBuckets(coinsAll, targetCount) {
+  const min = PRELAUNCH_MIN_MC;
+  const max = PRELAUNCH_MAX_MC;
+
+  const pool = [...(coinsAll || [])]
+    .filter((c) => c?.id !== "TTR")
+    .filter((c) => Number.isFinite(Number(c?.capNum)) && Number(c.capNum) > 0)
+    .filter((c) => Number(c.capNum) >= min && Number(c.capNum) <= max);
+
+  if (pool.length <= targetCount) return pool;
+
+  // 7 buckets across 1M–10M, pick ~2 per bucket (14 total)
+  const BUCKETS = 7;
+  const PER = Math.max(1, Math.floor(targetCount / BUCKETS)); // should be 2
+  const span = max - min;
+  const step = span / BUCKETS;
+
+  const buckets = Array.from({ length: BUCKETS }, () => []);
+  for (const c of pool) {
+    const cap = Number(c.capNum);
+    let bi = Math.floor((cap - min) / step);
+    if (bi < 0) bi = 0;
+    if (bi >= BUCKETS) bi = BUCKETS - 1;
+    buckets[bi].push(c);
+  }
+
+  // For each bucket: sort by cap, take one near low and one near high (or closest to extremes)
+  const picked = [];
+  for (let i = 0; i < BUCKETS; i++) {
+    const b = buckets[i].sort((a, b) => Number(a.capNum) - Number(b.capNum));
+    if (!b.length) continue;
+
+    // pick low-ish
+    picked.push(b[Math.floor(b.length * 0.25)] || b[0]);
+    // pick high-ish
+    if (picked.length < targetCount) picked.push(b[Math.floor(b.length * 0.75)] || b[b.length - 1]);
+
+    if (picked.length >= targetCount) break;
+  }
+
+  // If still not enough (some buckets empty), fill with evenly spaced from full pool
+  if (picked.length < targetCount) {
+    const sorted = pool.sort((a, b) => Number(a.capNum) - Number(b.capNum));
+    const need = targetCount - picked.length;
+    const used = new Set(picked.map((c) => c.addr || c.id || c.symbol));
+    for (let i = 0; i < sorted.length && (targetCount - picked.length) > 0; i++) {
+      const c = sorted[Math.floor((i * (sorted.length - 1)) / Math.max(1, need))];
+      const k = c?.addr || c?.id || c?.symbol;
+      if (!k || used.has(k)) continue;
+      used.add(k);
+      picked.push(c);
+    }
+  }
+
+  // Deduplicate + stable sort by cap desc for display
+  const seen = new Set();
+  const uniq = [];
+  for (const c of picked) {
+    const k = (c?.addr || c?.id || c?.symbol || "").toString();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    uniq.push(c);
+    if (uniq.length >= targetCount) break;
+  }
+
+  return uniq.sort((a, b) => Number(b.capNum) - Number(a.capNum)).slice(0, targetCount);
+}
+
 
 // Core value: forging threshold (USD market cap)
 const TTR_CORE_VALUE = 100_000;
+
 
 // ============================================================================
 // Helpers
 // ============================================================================
 const keyOf = (q, r) => `${q},${r}`;
+
+function fmtPrice(v, maxDecimals = 8) {
+  if (v == null) return "N/A";
+
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "N/A";
+
+  if (n > 0 && n < 1) {
+    return n.toFixed(maxDecimals).replace(/\.?0+$/, "");
+  }
+
+  return n.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: maxDecimals,
+  });
+}
+
 
 function hash32(str) {
   let h = 0x811c9dc5;
@@ -83,9 +242,9 @@ function makeSeededRand(seedStr) {
   return mulberry32(hash32(String(seedStr || "")));
 }
 
-function drawHexImage(g, href, h, hexRadius, scale) {
+function drawHexImage(g, href, h, hexRadius, scale, opacity = 1, className = "", delayMs = 0) {
   const size = hexRadius * 2 * scale;
-  g.append("image")
+  const img = g.append("image")
     .attr("href", href)
     .attr("width", size)
     .attr("height", size)
@@ -93,7 +252,17 @@ function drawHexImage(g, href, h, hexRadius, scale) {
     .attr("y", h.y - size / 2)
     .style("pointer-events", "none")
     .style("image-rendering", "auto")
+    .style("opacity", opacity)
+    .style("transform-box", "fill-box")
+    .style("transform-origin", "center center")
+    .style("will-change", "transform")
     .style("filter", "drop-shadow(0 0 4px rgba(0,0,0,0.35))");
+
+  if (className) {
+    img.attr("class", className);
+    if (delayMs) img.style("animation-delay", `${delayMs}ms`);
+  }
+  return img;
 }
 
 function normSym(c) {
@@ -167,12 +336,39 @@ function hexCorners(cx, cy, radius) {
 // Other coins sizing (organic)
 // ============================================================================
 function computeHexCountContinuousLarge(capUSD) {
+  // OTHER COINS ONLY: TTR-like ring sizing (no locks).
+  // Returns the number of hexes to draw for a cluster (including center).
   const cap = Math.max(0, Number(capUSD) || 0);
-  if (cap <= 0) return { total: 3 };
-  const x = cap / 500_000;
-  const growth = Math.log10(1 + x) * 10;
-  const raw = 3 + growth;
-  const total = Math.max(3, Math.min(MAX_HEX_PER_CLUSTER, Math.round(raw)));
+
+  // Always at least 1 hex so the logo has a "base" cell.
+  if (cap <= 0) return { total: 1 };
+
+  // Spend market cap across rings in spiral order (center already counted).
+  let remaining = Math.max(0, cap - OTHER_CORE_VALUE);
+  let total = 1;
+
+  const byKey = OTHER_RING_HEX_VALUE;
+
+  // Same ring key logic as TTR (distance from center)
+  function keyForRingDist(dist) {
+    if (dist <= 1) return "copper";
+    if (dist === 2) return "silver";
+    if (dist === 3) return "gold";
+    return "final";
+  }
+
+  const spiral = genSpiralAxialPositions(61).slice(1); // 60 positions around center
+  for (let i = 0; i < spiral.length; i++) {
+    const [dq, dr] = spiral[i];
+    const dist = axialDistance(0, 0, dq, dr);
+    const key = keyForRingDist(dist);
+    const cost = byKey[key] ?? byKey.copper;
+    if (remaining < cost) break;
+    remaining -= cost;
+    total += 1;
+    if (total >= MAX_HEX_PER_CLUSTER) break;
+  }
+
   return { total };
 }
 function computeHexCountContinuous(capUSD, scaleMode) {
@@ -182,12 +378,42 @@ function computeHexCountContinuous(capUSD, scaleMode) {
 // ============================================================================
 // TTR materials (rings-only)
 // ============================================================================
+// TTR MATERIAL THRESHOLDS (Rebalanced for perception)
+// Copper: < 3M | Silver: 3–15M | Gold: 15–50M | Final: 50M+
 const TTR_MATS_LARGE = [
-  { key: "copper", value: 100_000, stroke: "rgba(255,170,90,0.95)" },
-  { key: "silver", value: 250_000, stroke: "rgba(255,255,255,0.95)" },
-  { key: "gold", value: 300_000, stroke: "rgba(255,230,140,0.95)" },
-  { key: "final", value: 500_000, stroke: "rgba(210,190,255,0.95)" },
+  { key: "copper", value: 166_667, stroke: "rgba(255,170,90,0.95)" },
+  { key: "silver", value: 563_218, stroke: "rgba(255,255,255,0.95)" },
+  { key: "gold", value: 844_828, stroke: "rgba(255,230,140,0.95)" },
+  { key: "final", value: 1_126_437, stroke: "rgba(210,190,255,0.95)" },
 ];
+// ============================================================================
+// OTHER COINS sizing (TTR-like rings, NO LOCKS) — used for non-TTR clusters only
+// Core is always visible via the logo; rings scale by market cap using the same
+// ring geometry (center + rings) as TTR, but without lock visuals.
+// ============================================================================
+const OTHER_CORE_VALUE = 100_000;
+
+// These values mirror the "representative" ring thresholds we agreed on:
+// - Copper ring total ≈ 1,000,000 (so core+ring ≈ 1,100,000)
+// - Silver/Gold/Final use the same per-hex values as our ring reference.
+const OTHER_RING_HEX_VALUE = {
+  // Representative thresholds (same as TTR rings, but without lock visuals)
+  // Copper ring total ≈ 1,000,000 (so core+ring ≈ 1,100,000)
+  copper: 166_667,   // 6 * 166_667 ≈ 1,000,002
+  silver: 563_218,
+  gold: 844_828,
+  final: 1_126_437,
+};
+
+// Opacity only (keep colors as-is). Applied per-hex depending on ring distance.
+const OTHER_RING_OPACITY = {
+  // Opacity only (keep colors as-is). Make differences clearly visible.
+  copper: 0.65,
+  silver: 0.78,
+  gold: 0.90,
+  final: 1.00,
+};
+
 function computeTtrMaterialsRingsOnly(capMatsUSD) {
   const cap = Math.max(0, Number(capMatsUSD) || 0);
   if (cap <= 0) return [];
@@ -274,11 +500,22 @@ export default function Home() {
 
   const [refreshing, setRefreshing] = useState(false);
   const [cooldownLeft, setCooldownLeft] = useState(0);
+  // Circuit-breaker: if refresh fails / rate-limited, temporarily block new refreshes
+  const [refreshBlockedLeft, setRefreshBlockedLeft] = useState(0); // seconds
+  const refreshBlockUntilRef = useRef(0);
+  const refreshBlockTimerRef = useRef(null);
   const REFRESH_COOLDOWN_MS = 20_000;
   const lastRefreshAtRef = useRef(0);
   const cooldownTimerRef = useRef(null);
 
-  useEffect(() => () => cooldownTimerRef.current && clearInterval(cooldownTimerRef.current), []);
+  useEffect(
+    () =>
+      () => {
+        cooldownTimerRef.current && clearInterval(cooldownTimerRef.current);
+        refreshBlockTimerRef.current && clearInterval(refreshBlockTimerRef.current);
+      },
+    []
+  );
 
   const IS_ADMIN =
     typeof window !== "undefined" &&
@@ -303,6 +540,10 @@ export default function Home() {
   // Hover states (image swap)
   const [infoHover, setInfoHover] = useState(false);
   const [xHover, setXHover] = useState(false);
+
+  // Birdeye stats for INFO panel (1H / 24H + High/Low)
+  const [panelStats, setPanelStats] = useState(null);
+  const statsCacheRef = useRef(new Map()); // key: address -> {ts,data}
 
   // Prevent "ghost tap" on mobile: modal opens then immediately closes
   const lastPanelOpenAtRef = useRef(0);
@@ -387,52 +628,65 @@ export default function Home() {
   }, []);
 
   // TTR metrics refresh
-  useEffect(() => {
-    if (TTR_CONFIG.STATUS !== "LIVE") return;
-    let cancelled = false;
+useEffect(() => {
+  if (TTR_CONFIG.STATUS !== "LIVE") return;
+  let cancelled = false;
 
-    async function loadTTR() {
-      try {
-        setTtrLoading(true);
-        setTtrError(null);
+  async function loadTTR() {
+    try {
+      setTtrLoading(true);
+      setTtrError(null);
 
-        const mint = (TTR_CONFIG.MINT || "").trim();
-        const quote = (TTR_CONFIG.QUOTE_MINT || DEFAULT_USDC).trim();
+      const mint = (TTR_CONFIG.MINT || "").trim();
+      const quote = (TTR_CONFIG.QUOTE_MINT || DEFAULT_USDC).trim();
 
-        if (!mint || mint.toLowerCase() === "none") {
-          if (!cancelled) {
-            setTtrData(null);
-            setTtrCap(0);
-            setTtrLoading(false);
-          }
-          return;
+      if (!mint || mint.toLowerCase() === "none") {
+        if (!cancelled) {
+          setTtrData(null);
+          setTtrCap(0);
+          setTtrLoading(false);
         }
-
-        const res = await fetch(
-          `/api/ttr-metrics?mint=${encodeURIComponent(mint)}&quoteMint=${encodeURIComponent(quote)}`,
-          { cache: "no-store" }
-        );
-        const json = await res.json();
-        if (!json?.ok || !Number.isFinite(json.marketCap) || json.marketCap <= 0) {
-          throw new Error(json?.error || "TTR unavailable");
-        }
-        if (cancelled) return;
-        setTtrData(json);
-        setTtrCap(Math.round(json.marketCap));
-      } catch (e) {
-        if (cancelled) return;
-        setTtrError(e?.message || String(e));
-        setTtrData(null);
-        setTtrCap(0);
-      } finally {
-        if (!cancelled) setTtrLoading(false);
+        return;
       }
-    }
 
-    loadTTR();
-    const timer = setInterval(loadTTR, 20_000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, []);
+      const res = await fetch(
+        `/api/ttr-metrics?mint=${encodeURIComponent(mint)}&quoteMint=${encodeURIComponent(quote)}`,
+        { cache: "no-store" }
+      );
+
+      const json = await res.json();
+
+      // ✅ Normalize: always expose USD price in `price`
+      const normalized = {
+        ...json,
+        price: (json?.priceUsd ?? json?.price ?? null),
+      };
+
+      if (!normalized?.ok || !Number.isFinite(normalized.marketCap) || normalized.marketCap <= 0) {
+        throw new Error(normalized?.error || "TTR unavailable");
+      }
+      if (cancelled) return;
+
+      setTtrData(normalized);
+      setTtrCap(Math.round(normalized.marketCap));
+    } catch (e) {
+      if (cancelled) return;
+      setTtrError(e?.message || String(e));
+      setTtrData(null);
+      setTtrCap(0);
+    } finally {
+      if (!cancelled) setTtrLoading(false);
+    }
+  }
+
+  loadTTR();
+  const timer = setInterval(loadTTR, 20_000);
+  return () => {
+    cancelled = true;
+    clearInterval(timer);
+  };
+}, []);
+
 
   // Persist TTR
   useEffect(() => {
@@ -455,6 +709,46 @@ export default function Home() {
       window.removeEventListener("resize", onResize);
     };
   }, [IS_ADMIN]);
+
+  // Fetch Birdeye stats for currently opened INFO panel (only when INFO is open and address exists)
+  useEffect(() => {
+    let cancelled = false;
+    async function loadStats() {
+      if (!selectedCoin) { setPanelStats(null); return; }
+
+      // Birdeye tokens in your window usually have `id` as token address.
+      // Special-case TTR: use the configured mint so we can show 1H/24H variations for TTR too.
+      const isTTR = String(selectedCoin?.id || selectedCoin?.symbol || "").toUpperCase() === "TTR";
+      const ttrMint = (TTR_CONFIG.MINT || "").toString().trim();
+
+      const addr = (isTTR ? ttrMint : (selectedCoin.id || selectedCoin.address || selectedCoin.mint || ""))
+        .toString()
+        .trim();
+
+      if (!addr || addr.toLowerCase() === "ttr" || addr.toLowerCase() === "none") { setPanelStats(null); return; }
+
+      const now = Date.now();
+      const cache = statsCacheRef.current;
+      const cached = cache.get(addr);
+      if (cached && (now - cached.ts) < 15_000) { setPanelStats(cached.data); return; }
+
+      try {
+        const res = await fetch(`/api/birdeye-stats?address=${encodeURIComponent(addr)}`);
+        const json = await res.json();
+        if (cancelled) return;
+        if (json && json.ok) {
+          cache.set(addr, { ts: Date.now(), data: json });
+          setPanelStats(json);
+        } else {
+          setPanelStats(null);
+        }
+      } catch {
+        if (!cancelled) setPanelStats(null);
+      }
+    }
+    loadStats();
+    return () => { cancelled = true; };
+  }, [selectedCoin]);
 
   // Birdeye cache manager
   const birdeyeMgrRef = useRef({ ts: 0, data: null, promise: null, reqId: 0 });
@@ -518,9 +812,46 @@ export default function Home() {
       } catch { if (!cancelled) setCgOk(false); }
     }
 
+    // Auto-refresh (launch-safe):
+    // - Refresh on first load
+    // - Refresh periodically, but PAUSE when the tab is hidden (prevents "ghost" traffic)
+    // - When tab becomes visible again, refresh once immediately
+    // NOTE: if you want it more aggressive, change 10 * 60 * 1000 back to 5 * 60 * 1000.
+    const AUTO_REFRESH_MS = 10 * 60 * 1000;
+
+    let intervalId = null;
+    const startInterval = () => {
+      if (intervalId) return;
+      intervalId = setInterval(() => {
+        if (!document.hidden) load();
+      }, AUTO_REFRESH_MS);
+    };
+    const stopInterval = () => {
+      if (!intervalId) return;
+      clearInterval(intervalId);
+      intervalId = null;
+    };
+
+    const onVis = () => {
+      if (document.hidden) {
+        stopInterval();
+      } else {
+        load();
+        startInterval();
+      }
+    };
+
     load();
-    const id = setInterval(load, 5 * 60 * 1000);
-    return () => { cancelled = true; clearInterval(id); };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVis);
+      if (!document.hidden) startInterval();
+    }
+
+    return () => {
+      cancelled = true;
+      stopInterval();
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVis);
+    };
   }, []);
 
   function startRefreshCooldown() {
@@ -535,9 +866,26 @@ export default function Home() {
     }, 250);
   }
 
+  function startRefreshBlock(seconds = 60) {
+    const until = Date.now() + Math.max(1, seconds) * 1000;
+    refreshBlockUntilRef.current = until;
+    setRefreshBlockedLeft(Math.ceil((until - Date.now()) / 1000));
+    if (refreshBlockTimerRef.current) clearInterval(refreshBlockTimerRef.current);
+    refreshBlockTimerRef.current = setInterval(() => {
+      const leftMs = refreshBlockUntilRef.current - Date.now();
+      const leftSec = Math.max(0, Math.ceil(leftMs / 1000));
+      setRefreshBlockedLeft(leftSec);
+      if (leftSec <= 0) {
+        clearInterval(refreshBlockTimerRef.current);
+        refreshBlockTimerRef.current = null;
+      }
+    }, 250);
+  }
+
   async function triggerFullRefresh() {
     const since = Date.now() - (lastRefreshAtRef.current || 0);
-    if (refreshing || since < REFRESH_COOLDOWN_MS || cooldownLeft > 0) return;
+    const blocked = Date.now() < (refreshBlockUntilRef.current || 0);
+    if (blocked || refreshing || since < REFRESH_COOLDOWN_MS || cooldownLeft > 0) return;
 
     setRefreshing(true);
     startRefreshCooldown();
@@ -553,53 +901,108 @@ export default function Home() {
         setLastUpdateUTC(new Date(now).toUTCString().slice(17, 22) + " UTC");
         setCgOk(true);
       } else setCgOk(false);
-    } finally { setRefreshing(false); }
+    } catch (e) {
+      // If we hit a temporary issue (rate-limit / upstream down), block further refresh attempts briefly.
+      startRefreshBlock(60);
+    } finally {
+      setRefreshing(false);
+    }
   }
 
-  // Window selection around TTR
+  // Window selection around TTR (normal) OR fixed pre-launch list (when TTR < threshold)
   useEffect(() => {
     if (!coinsAll || coinsAll.length === 0) { setCoins([]); return; }
 
-    const ABS_MIN_CAP = 500_000;
-    const ABS_MAX_CAP = 50_000_000;
+    const isPrelaunch = TTR_IS_FORGING || ((TTR_CAP_RAW ?? 0) < PRELAUNCH_TTR_THRESHOLD);
 
-    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-    const safeTTR = TTR_CAP_SAFE;
+    if (isPrelaunch) {
+      const picked = pickPrelaunchCoins(coinsAll);
 
-    const FLOOR_RATIO = safeTTR >= 2_000_000 ? 0.5 : 0.0;
-    const minCapDyn = Math.max(ABS_MIN_CAP, FLOOR_RATIO > 0 ? safeTTR * FLOOR_RATIO : ABS_MIN_CAP);
+      // Prefer the fixed mint list if those mints exist in the dataset
+      if (picked.length >= PRELAUNCH_TARGET_COUNT) {
+        setCoins(picked);
+        return;
+      }
 
-    const MAX_ABOVE_RATIO = 2.1;
-    const maxCapDyn = clamp(Math.max(safeTTR * MAX_ABOVE_RATIO, 2_000_000), ABS_MIN_CAP, ABS_MAX_CAP);
+      // Fallback A (robust): bucketed pick across 1M–10M for variety (7 buckets × 2)
+      const band = pickPrelaunchBuckets(coinsAll, PRELAUNCH_TARGET_COUNT);
 
-    const uniqueAll = dedupeBestByGroup(coinsAll).filter((c) => {
-      const cap = Number(c?.capNum ?? 0) || 0;
-      return cap > 0 && cap >= minCapDyn && cap <= maxCapDyn;
-    });
+      if (band.length >= Math.min(6, PRELAUNCH_TARGET_COUNT)) {
+        setCoins(band);
+        return;
+      }
 
-    const byCap = [...uniqueAll].sort((a, b) => (Number(a.capNum) || 0) - (Number(b.capNum) || 0));
+      // Fallback B: still populate the map (top caps) if the dataset is sparse
+      const top = [...coinsAll]
+        .filter((c) => c?.id !== "TTR")
+        .filter((c) => Number.isFinite(Number(c?.capNum)) && Number(c.capNum) > 0)
+        .sort((a, b) => Number(b.capNum) - Number(a.capNum))
+        .slice(0, PRELAUNCH_TARGET_COUNT);
 
-    const selected = [];
-    const seen = new Set();
-    function tryAdd(c) {
-      const k = groupKey(c);
-      if (!k || seen.has(k)) return false;
-      seen.add(k);
-      selected.push(c);
-      return true;
+      setCoins(top.length ? top : coinsAll.slice(0, PRELAUNCH_TARGET_COUNT));
+      return;
     }
 
-    const n = Math.min(WINDOW_SIZE, byCap.length);
-    for (let i = 0; i < n; i++) {
-      const idx = Math.floor(((i + 0.5) * byCap.length) / n);
-      tryAdd(byCap[Math.min(byCap.length - 1, Math.max(0, idx))]);
+    // =========================
+    // NORMAL WINDOW (TTR-driven cap band)
+    // =========================
+    const ttr = (coinsAll || []).find((c) => c?.id === "TTR") || null;
+    const ttrCapNum = Number(ttr?.capNum);
+    const cap = Number.isFinite(ttrCapNum) && ttrCapNum > 0 ? ttrCapNum : (TTR_CAP_RAW ?? 0);
+
+    const targetWindow = (Number.isFinite(cap) && cap >= TTR_DEDENSIFY_CAP) ? WINDOW_SIZE_DEDENSED : WINDOW_SIZE;
+
+    // If TTR cap is unknown, fall back to your previous behavior (top WINDOW_SIZE by cap)
+    if (!Number.isFinite(cap) || cap <= 0) {
+      const top = [...coinsAll]
+        .filter((c) => c?.id !== "TTR")
+        .filter((c) => Number.isFinite(Number(c?.capNum)) && Number(c.capNum) > 0)
+        .sort((a, b) => Number(b.capNum) - Number(a.capNum))
+        .slice(0, Math.max(0, targetWindow - 1));
+
+      setCoins(ttr ? [ttr, ...top].slice(0, targetWindow) : top.slice(0, targetWindow));
+      return;
     }
 
-    for (const c of byCap) { if (selected.length >= WINDOW_SIZE) break; tryAdd(c); }
-    setCoins(selected.slice(0, WINDOW_SIZE));
-  }, [coinsAll, ttrCap]);
+    // Dynamic band: remove tiny coins when TTR is big
+    const BASE_MIN = Math.max(1_000_000, cap * 0.10); // 10% of TTR, but never below 1M
+    const BASE_MAX = cap * 2.0;                       // up to 2x TTR
 
-  const coinsSig = useMemo(() => {
+    const bandAll = [...coinsAll]
+      .filter((c) => c?.id !== "TTR")
+      .filter((c) => Number.isFinite(Number(c?.capNum)) && Number(c.capNum) > 0)
+      .filter((c) => Number(c.capNum) >= BASE_MIN && Number(c.capNum) <= BASE_MAX)
+      .sort((a, b) => Number(a.capNum) - Number(b.capNum)); // ascending for even picking
+
+    // If band is sparse, widen gently (still no microcaps)
+    const widened = bandAll.length >= Math.min(8, targetWindow - 1)
+      ? bandAll
+      : [...coinsAll]
+          .filter((c) => c?.id !== "TTR")
+          .filter((c) => Number.isFinite(Number(c?.capNum)) && Number(c.capNum) > 0)
+          .filter((c) => Number(c.capNum) >= Math.max(1_000_000, cap * 0.05) && Number(c.capNum) <= cap * 3.0)
+          .sort((a, b) => Number(a.capNum) - Number(b.capNum));
+
+    const src = widened;
+    const need = Math.max(0, targetWindow - (ttr ? 1 : 0));
+
+    function pickEvenly(list, n) {
+      if (!list.length || n <= 0) return [];
+      if (list.length <= n) return list.slice();
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        const idx = Math.floor((i * (list.length - 1)) / Math.max(1, n - 1));
+        out.push(list[idx]);
+      }
+      return out;
+    }
+
+    const picked = pickEvenly(src, need).sort((a, b) => Number(b.capNum) - Number(a.capNum));
+
+    setCoins(ttr ? [ttr, ...picked].slice(0, targetWindow) : picked.slice(0, targetWindow));
+  }, [coinsAll, ttrCap, TTR_IS_FORGING]);
+
+const coinsSig = useMemo(() => {
     return (coins || [])
       .map((c) => `${(c?.symbol || c?.name || c?.id || "").toString().toUpperCase()}_${Math.round(Number(c?.capNum || 0))}`)
       .sort()
@@ -619,6 +1022,30 @@ export default function Home() {
     const svgEl = svgRef.current;
     const svg = d3.select(svgEl);
     svg.selectAll("*").remove();
+
+    const defsGrid = svg.append("defs");
+
+const gridOutline = defsGrid.append("filter")
+  .attr("id", "grid-outline-neo")
+  .attr("x", "-60%")
+  .attr("y", "-60%")
+  .attr("width", "220%")
+  .attr("height", "220%");
+
+// Outer black
+gridOutline.append("feDropShadow")
+  .attr("dx", 0)
+  .attr("dy", 0)
+  .attr("stdDeviation", 2.2)
+  .attr("flood-color", "rgba(0,0,0,0.75)");
+
+// Inner black crisp
+gridOutline.append("feDropShadow")
+  .attr("dx", 0)
+  .attr("dy", 0)
+  .attr("stdDeviation", 2.2)
+  .attr("flood-color", "rgba(0,0,0,0.55)");
+
 
     const myRenderId = ++renderIdRef.current;
     const isStale = () => myRenderId !== renderIdRef.current;
@@ -654,16 +1081,18 @@ export default function Home() {
       }
     }
 
-    svg.append("g")
-      .selectAll("path")
-      .data(hexList)
-      .enter()
-      .append("path")
-      .attr("d", hexbin.hexagon())
-      .attr("transform", (d) => `translate(${d.x},${d.y})`)
-      .attr("fill", "rgba(255,255,255,0.03)")
-      .attr("stroke", "rgba(255,255,255,0.07)")
-      .attr("stroke-width", 0.6);
+   svg.append("g")
+  .attr("class", "hex-grid")
+  .selectAll("path")
+  .data(hexList)
+  .enter()
+  .append("path")
+  .attr("d", hexbin.hexagon())
+  .attr("transform", (d) => `translate(${d.x},${d.y})`)
+  .attr("fill", "rgba(255,255,255,0.015)")
+  .attr("stroke", "rgba(120,220,255,0.85)")
+  .attr("stroke-width", 0.9)
+  .attr("filter", "url(#grid-outline-neo)");
 
     const ttrHex = hexList.reduce((prev, curr) =>
       Math.hypot(curr.x - width / 2, curr.y - height / 2) <
@@ -809,83 +1238,197 @@ export default function Home() {
     }
 
     (async () => {
+      // =============================================================
+      // TTR materials (step-by-step)
+      // Show ONLY: unlocked hexes + the next "locked" hex (one at a time)
+      // Example: [unlock, unlock, unlock] + [next lock]
+      // =============================================================
       const ttrGroup = svg.append("g").attr("class", "ttr-materials");
-      if (TTR_HAS_GLOW && TTR_CAP_MATS > 0) {
-        const ttrMats = computeTtrMaterialsRingsOnly(TTR_CAP_MATS);
-        const ttrSpiral = genSpiralAxialPositions(61).slice(1);
-        ttrSpiral.forEach(([dq, dr], i) => {
-          const mat = ttrMats[i];
-          if (!mat) return;
+
+      // Determine ring material for a given distance (same logic as materials compute)
+      function keyForRingDist(dist) {
+        if (dist <= 1) return "copper";
+        if (dist === 2) return "silver";
+        if (dist === 3) return "gold";
+        return "final";
+      }
+
+      if (TTR_HAS_GLOW) {
+        const unlockedMats = computeTtrMaterialsRingsOnly(TTR_CAP_MATS);
+        const unlockedCount = unlockedMats.length;
+        const ttrSpiral = genSpiralAxialPositions(61).slice(1); // 60 positions around the core
+
+        // CURRENT ring = ring of the "next" hex to unlock
+        // We show:
+        // - all previous rings fully unlocked
+        // - current ring as LOCK, progressively unlocking within it
+        // - hide future rings
+        let currentRingDist = null;
+        if (unlockedCount < ttrSpiral.length) {
+          const [ndq, ndr] = ttrSpiral[unlockedCount];
+          currentRingDist = axialDistance(0, 0, ndq, ndr);
+        }
+
+        const TTR_BREATH_DELAY_MS = { copper: 0, silver: 420, gold: 840, final: 1260 };
+
+        for (let i = 0; i < ttrSpiral.length; i++) {
+          const [dq, dr] = ttrSpiral[i];
+          const dist = axialDistance(0, 0, dq, dr);
+
+          if (currentRingDist != null && dist > currentRingDist) continue;
+
           const q = ttrHex.q + dq;
           const r = ttrHex.r + dr;
           const h = axialMap.get(keyOf(q, r));
-          if (!h) return;
+          if (!h) continue;
+
+          const ringKey = keyForRingDist(dist);
+
+          // Previous rings are unlocked (spiral fills outward by rings)
+          let isUnlocked = true;
+          if (currentRingDist != null && dist === currentRingDist) {
+            // In current ring: unlock only those reached by the spiral so far
+            isUnlocked = i < unlockedCount;
+          }
+          if (currentRingDist == null) isUnlocked = true; // everything unlocked
+
+          const matKey = isUnlocked ? (unlockedMats[i]?.key || ringKey) : ringKey;
+          const href = isUnlocked
+            ? (TTR_IMG_UNLOCK[matKey] || TTR_IMG_UNLOCK[ringKey])
+            : (TTR_IMG_LOCK[ringKey] || TTR_IMG_LOCK[matKey]);
+
+          const alpha = 1;
 
           ttrGroup.append("path")
             .attr("d", hexbin.hexagon())
             .attr("transform", `translate(${h.x},${h.y})`)
-            .attr("fill", "rgba(0,0,0,0)")
-            .attr("stroke", mat.stroke)
-            .attr("stroke-width", 1.25)
-            .attr("opacity", 0.95);
+            .attr("fill", "rgba(255,255,255,0.03)")
+            .attr("stroke", "rgba(59,188,255,0.20)")
+            .attr("stroke-width", 0.6)
+            .style("opacity", alpha)
+            .style("filter", "drop-shadow(0 0 2px rgba(59,188,255,0.35))");
 
-          const href =
-            mat.key === "copper" ? "/hexacuivre.png" :
-            mat.key === "silver" ? "/hexasilver.png" :
-            mat.key === "gold" ? "/hexagold.png" :
-            "/hexafinal.png";
-
-          drawHexImage(ttrGroup, href, h, hexRadius, TTR_IMAGE_SCALE[mat.key] || 1.0);
-        });
+          const breathClass = isUnlocked ? `ttr-mat-breath ttr-mat-${matKey}` : "";
+          const breathDelay = isUnlocked ? (TTR_BREATH_DELAY_MS[matKey] || 0) : 0;
+          drawHexImage(ttrGroup, href, h, hexRadius, TTR_IMAGE_SCALE[matKey] || 1.0, alpha, breathClass, breathDelay);
+        }
       }
 
       if (coins && coins.length) await placeAll();
       if (isStale()) return;
 
+
       const defs = svg.append("defs");
+
       clusters.forEach((c) => {
-        const grad = defs.append("radialGradient")
+        // Gradient for cluster fill
+        const grad = defs
+          .append("radialGradient")
           .attr("id", `grad-${c.id}`)
           .attr("cx", "50%")
           .attr("cy", "50%")
           .attr("r", "60%");
-        grad.append("stop").attr("offset", "0%").attr("stop-color", c.color).attr("stop-opacity", 1);
-        grad.append("stop").attr("offset", "100%").attr("stop-color", d3.color(c.color).darker(2)).attr("stop-opacity", 0.85);
 
-        const g = svg.append("g").attr("class", `cluster-${c.id} cluster-breath`).style("opacity", 0.65);
+        grad.append("stop")
+          .attr("offset", "0%")
+          .attr("stop-color", c.color)
+          .attr("stop-opacity", 1);
+
+        grad.append("stop")
+          .attr("offset", "100%")
+          .attr("stop-color", d3.color(c.color).darker(2))
+          .attr("stop-opacity", 0.85);
+
+        const g = svg
+          .append("g")
+          .attr("class", `cluster-${c.id} cluster-breath`)
+          .style("opacity", 1);
+
+        const hexPath = hexbin.hexagon();
+
+        // Draw each hex with a triple-stroke outline: black → blue → black
 
         c.hexes.forEach((h) => {
+          // Ring-based opacity (OTHER coins only). Keep colors unchanged; vary opacity by distance.
+          // Center (dist=0) + first ring (dist=1) are treated as "copper".
+          const center = c.hexes && c.hexes.length ? c.hexes[0] : null;
+          const dist = center ? axialDistance(h.q, h.r, center.q, center.r) : 0;
+          let ringKey = "final";
+          if (dist <= 1) ringKey = "copper";
+          else if (dist === 2) ringKey = "silver";
+          else if (dist === 3) ringKey = "gold";
+          const ringOpacity = OTHER_RING_OPACITY[ringKey] ?? 0.85;
+
+          const tr = `translate(${h.x},${h.y})`;
+
+          // 1) Outer dark stroke
           g.append("path")
-            .attr("d", hexbin.hexagon())
-            .attr("transform", `translate(${h.x},${h.y})`)
+            .attr("d", hexPath)
+            .attr("transform", tr)
+            .attr("fill", "none")
+            .attr("stroke", "rgba(0,0,0,0.65)")
+            .attr("stroke-width", 2.6).style("opacity", ringOpacity);
+
+          // 2) Mid blue stroke
+          g.append("path")
+            .attr("d", hexPath)
+            .attr("transform", tr)
+            .attr("fill", "none")
+            .attr("stroke", "rgba(80,170,255,0.55)")
+            .attr("stroke-width", 1.6).style("opacity", ringOpacity);
+
+          // 3) Main filled hex with a thin inner dark stroke
+          g.append("path")
+            .attr("d", hexPath)
+            .attr("transform", tr)
             .attr("fill", `url(#grad-${c.id})`)
-            .attr("stroke", d3.color(c.color).darker(1))
-            .attr("stroke-width", 1.3);
+            .attr("stroke", "rgba(0,0,0,0.55)")
+            .attr("stroke-width", 0.8).style("opacity", ringOpacity);
         });
 
+        // Logo
         g.append("image")
           .attr("xlink:href", c.logo)
           .attr("width", 48)
           .attr("height", 48)
           .attr("x", Math.round(c.centerX - 24))
           .attr("y", Math.round(c.centerY - 24))
-                    .style("cursor", "pointer")
-          .style("pointer-events", "all")
-          ;
+          .style("cursor", "pointer")
+          .style("pointer-events", "all");
 
-        attachTapHandler(g.selectAll("image").filter((dd, ii, nn) => nn[ii] === g.selectAll("image").nodes().slice(-1)[0]), () => { markPanelOpened(); setClosingInfo(false); setSelectedCoin(c); });
+        // Tap handler (last image in this group)
+        attachTapHandler(
+          g.selectAll("image").filter((dd, ii, nn) => nn[ii] === g.selectAll("image").nodes().slice(-1)[0]),
+          () => { markPanelOpened(); setClosingInfo(false); setSelectedCoin(c); }
+        );
       });
 
-      // TTR halo gradient
+// TTR halo gradient
       const defsTTR = svg.append("defs");
       const gradTTR = defsTTR.append("radialGradient")
         .attr("id", "grad-ttr-halo")
         .attr("cx", "50%")
         .attr("cy", "50%")
         .attr("r", "70%");
-      gradTTR.append("stop").attr("offset", "0%").attr("stop-color", "#e8f7ff").attr("stop-opacity", 0.85);
-      gradTTR.append("stop").attr("offset", "60%").attr("stop-color", "#3bbcff").attr("stop-opacity", 0.5);
-      gradTTR.append("stop").attr("offset", "100%").attr("stop-color", "#1b4fff").attr("stop-opacity", 0.18);
+     gradTTR.append("stop")
+  .attr("offset", "0%")
+  .attr("stop-color", "#e8f7ff")
+  .attr("stop-opacity", 0.9);
+
+gradTTR.append("stop")
+  .attr("offset", "35%")
+  .attr("stop-color", "#7fd9ff")
+  .attr("stop-opacity", 0.55);
+
+gradTTR.append("stop")
+  .attr("offset", "65%")
+  .attr("stop-color", "#3bbcff")
+  .attr("stop-opacity", 0.25);
+
+gradTTR.append("stop")
+  .attr("offset", "100%")
+  .attr("stop-color", "#1b4fff")
+  .attr("stop-opacity", 0.05);
 
       const ttrInfo = {
         id: "TTR",
@@ -900,31 +1443,37 @@ export default function Home() {
       };
 
       const ttr = svg.append("g")
-        .attr("class", TTR_HAS_GLOW ? "ttr-core ttr-halo-pulse" : "ttr-core")
-        .style("cursor", "pointer");
+  .attr("class", "ttr-core")
+  .style("cursor", "pointer");
 
-      ttr.append("circle")
-        .attr("cx", centerXGrid)
-        .attr("cy", centerYGrid)
-        .attr("r", 55)
-        .attr("fill", "none")
-        .attr("stroke", "url(#grad-ttr-halo)")
-        .attr("stroke-width", 4.5)
-        .attr("stroke-opacity", 0.6);
+// HALO (pulse)
+const ttrHalo = ttr.append("g")
+  .attr("class", "ttr-halo-pulse"); // <-- animation UNIQUEMENT ici
 
-      ttr.append("circle")
-        .attr("cx", centerXGrid)
-        .attr("cy", centerYGrid)
-        .attr("r", 48)
-        .attr("fill", "url(#grad-ttr-halo)")
-        .attr("opacity", 0.28);
+ttrHalo.append("circle")
+  .attr("cx", centerXGrid)
+  .attr("cy", centerYGrid)
+  .attr("r", 55)
+  .attr("fill", "none")
+  .attr("stroke", "url(#grad-ttr-halo)")
+  .attr("stroke-width", 4.5)
+  .attr("stroke-opacity", 0.6);
 
-      ttr.append("image")
-        .attr("xlink:href", TTR_HAS_GLOW ? "/ttr-core-glow.png" : "/ttr-core.png")
-        .attr("width", 70)
-        .attr("height", 70)
-        .attr("x", centerXGrid - 35)
-        .attr("y", centerYGrid - 35);
+ttrHalo.append("circle")
+  .attr("cx", centerXGrid)
+  .attr("cy", centerYGrid)
+  .attr("r", 48)
+  .attr("fill", "url(#grad-ttr-halo)")
+  .attr("opacity", 0.28);
+
+// IMAGE (FIXE)
+ttr.append("image")
+  .attr("xlink:href", TTR_HAS_GLOW ? "/ttr-core-glow.png" : "/ttr-core.png")
+  .attr("width", 70)
+  .attr("height", 70)
+  .attr("x", centerXGrid - 35)
+  .attr("y", centerYGrid - 35);
+
 
       ttr.on("click", () => { markPanelOpened(); setClosingInfo(false); setSelectedCoin(ttrInfo); })
       .on("touchstart", () => { markPanelOpened(); setClosingInfo(false); setSelectedCoin(ttrInfo); })
@@ -1009,6 +1558,17 @@ export default function Home() {
           50% { opacity: 0.65; transform: scale(1.06); filter: drop-shadow(0 0 10px rgba(80, 190, 255, 0.55)) drop-shadow(0 0 22px rgba(40, 140, 255, 0.35)); }
         }
         .ttr-halo-pulse { transform-origin: center center; transform-box: fill-box; will-change: transform, opacity, filter; animation: ttrHaloPulse 4.8s ease-in-out infinite; }
+
+        @keyframes ttrMatBreath {
+          0%,100% { transform: scale(1); }
+          50% { transform: scale(1.055); }
+        }
+        .ttr-mat-breath {
+          transform-origin: center center;
+          transform-box: fill-box;
+          will-change: transform;
+          animation: ttrMatBreath 4.6s ease-in-out infinite;
+        }
 
         /* ✅ Button hover glow */
         .woc-icon-btn{
@@ -1097,7 +1657,7 @@ export default function Home() {
 
           <button
             onClick={triggerFullRefresh}
-            disabled={refreshing || cooldownLeft > 0}
+            disabled={refreshing || cooldownLeft > 0 || refreshBlockedLeft > 0}
             style={{
               marginTop: 4,
               background: "rgba(0,0,0,0.35)",
@@ -1105,216 +1665,339 @@ export default function Home() {
               border: "1px solid rgba(255,255,255,0.25)",
               borderRadius: 6,
               padding: "6px 10px",
-              cursor: refreshing || cooldownLeft > 0 ? "not-allowed" : "pointer",
-              opacity: refreshing || cooldownLeft > 0 ? 0.55 : 1,
+              cursor: refreshing || cooldownLeft > 0 || refreshBlockedLeft > 0 ? "not-allowed" : "pointer",
+              opacity: refreshing || cooldownLeft > 0 || refreshBlockedLeft > 0 ? 0.55 : 1,
               fontFamily: "'Press Start 2P', monospace",
               fontSize: 9,
             }}
           >
-            {refreshing ? "Refreshing…" : cooldownLeft > 0 ? `Cooldown ${cooldownLeft}s` : "Refresh Data"}
+            {refreshing
+              ? "Refreshing…"
+              : refreshBlockedLeft > 0
+                ? `Hold ${refreshBlockedLeft}s`
+                : cooldownLeft > 0
+                  ? `Cooldown ${cooldownLeft}s`
+                  : "Refresh Data"}
           </button>
         </div>
 
-        {/* INFO button */}
-        <div
-          onClick={(e) => { e.stopPropagation(); markPanelOpened(); setSelectedCoin(null); setClosingInfo(false); setLegendOpen(true); }}onMouseEnter={() => setInfoHover(true)}
-          onMouseLeave={() => setInfoHover(false)}
-          onTouchStart={() => setInfoHover(true)}
-          onTouchEnd={() => setInfoHover(false)}
-          style={{ position: "absolute", bottom: "30px", right: "180px", zIndex: 65, width: "70px", height: "70px", cursor: "pointer", touchAction: "manipulation" }}
-          title="Legend / Scales"
-        >
-          <img
-            src={infoHover ? "/btn-info-hover.png" : "/btn-info.png"}
-            alt="Info"
-            className="woc-icon-btn"
-            style={{ width: "100%", height: "100%" }}
-            draggable={false}
-          />
+       {/* INFO button */}
+<div
+  onClick={(e) => {
+    e.stopPropagation();
+    markPanelOpened();
+    setSelectedCoin(null);
+    setClosingInfo(false);
+    setLegendOpen(true);
+  }}
+  onMouseEnter={() => setInfoHover(true)}
+  onMouseLeave={() => setInfoHover(false)}
+  onTouchStart={() => setInfoHover(true)}
+  onTouchEnd={() => setInfoHover(false)}
+  style={{
+    position: "absolute",
+    bottom: "30px",
+    right: "180px",
+    zIndex: 65,
+    width: "70px",
+    height: "70px",
+    cursor: "pointer",
+    touchAction: "manipulation",
+  }}
+  title="Legend / Scales"
+>
+  <img
+    src={infoHover ? "/btn-info-hover.png" : "/btn-info.png"}
+    alt="Info"
+    className="woc-icon-btn"
+    style={{ width: "100%", height: "100%" }}
+    draggable={false}
+  />
+</div>
+
+{/* X button */}
+<a
+  href="https://x.com/Kingnarval10307"
+  target="_blank"
+  rel="noreferrer"
+  onMouseEnter={() => setXHover(true)}
+  onMouseLeave={() => setXHover(false)}
+  onTouchStart={() => setXHover(true)}
+  onTouchEnd={() => setXHover(false)}
+  style={{
+    position: "absolute",
+    bottom: "30px",
+    right: "115px",
+    zIndex: 65,
+    width: "70px",
+    height: "70px",
+    cursor: "pointer",
+    touchAction: "manipulation",
+  }}
+  title="King Narwhal on X"
+>
+  <img
+    src={xHover ? "/btn-x-hover.png" : "/btn-x.png"}
+    alt="X"
+    className="woc-icon-btn"
+    style={{ width: "100%", height: "100%" }}
+    draggable={false}
+  />
+</a>
+</div>
+
+{/* GLOBAL CLICK-CLOSE OVERLAY (closes on ANY click/tap) */}
+{(selectedCoin || legendOpen) && (
+  <div
+    onPointerDown={(e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (selectedCoin) startCloseInfo();
+      if (legendOpen) startCloseLegend();
+    }}
+    style={{
+      position: "fixed",
+      inset: 0,
+      zIndex: 1000000,
+      background: "transparent",
+      touchAction: "manipulation",
+    }}
+  />
+)}
+
+{/* INFO PANEL */}
+{selectedCoin && (
+  <div
+    data-info-panel
+    onPointerDown={(e) => e.stopPropagation()}
+    style={{
+      position: "fixed",
+      left: "50%",
+      top: "50%",
+      transform: "translate(-50%, -50%)",
+      width: panelW,
+      height: panelH,
+      zIndex: 1000001,
+      fontFamily: "'Press Start 2P', monospace",
+      color: "#ffd87a",
+      textShadow: "0 0 6px rgba(255,215,100,0.6)",
+      display: "flex",
+      justifyContent: "center",
+      alignItems: "center",
+      textAlign: "center",
+      pointerEvents: "auto",
+      animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`,
+    }}
+  >
+    <div
+      className="woc-panel-inner"
+      style={{
+        animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`,
+        width: "100%",
+        height: "100%",
+        position: "relative",
+      }}
+    >
+      <img
+        src="/virgin-border.png"
+        alt="frame"
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+        }}
+      />
+
+      <div
+        className="woc-text woc-safe"
+        style={{
+          position: "absolute",
+          top: "70%",
+          left: "50%",
+          width: "80%",
+          height: "80%",
+          transform: "translate(-50%, -50%)",
+          overflowY: "auto",
+          overflowX: "hidden",
+          padding: "18px 22px",
+          boxSizing: "border-box",
+          zIndex: 2,
+          textAlign: "center",
+        }}
+      >
+        <div style={{ marginBottom: 18 }}>
+          <div className="woc-title" style={{ marginBottom: 10 }}>
+            INFO
+          </div>
+          <div>Name: {selectedCoin.name}</div>
+          <div>
+            Mkt Cap:{" "}
+            {selectedCoin.capNum > 0
+              ? `${(selectedCoin.capNum / 1e6).toFixed(2)}M`
+              : "N/A"}
+          </div>
+          <div>
+            Price:{" "}
+            {!selectedCoin.price || selectedCoin.price === "$0"
+              ? "N/A"
+              : selectedCoin.price}
+          </div>
         </div>
 
-        {/* X button */}
-        <a
-          href="https://x.com/Kingnarval10307"
-          target="_blank"
-          rel="noreferrer"
-          onMouseEnter={() => setXHover(true)}
-          onMouseLeave={() => setXHover(false)}
-          onTouchStart={() => setXHover(true)}
-          onTouchEnd={() => setXHover(false)}
-          style={{ position: "absolute", bottom: "30px", right: "115px", zIndex: 65, width: "70px", height: "70px", cursor: "pointer" }}
-          title="King Narwhal on X"
-        >
-          <img
-            src={xHover ? "/btn-x-hover.png" : "/btn-x.png"}
-            alt="X"
-            className="woc-icon-btn"
-            style={{ width: "100%", height: "100%" }}
-            draggable={false}
-          />
-        </a>
-      </div>
+        <div style={{ marginTop: 8, marginBottom: 10, fontWeight: 800 }}>
+          Price variation:
+        </div>
 
-
-      {/* GLOBAL CLICK-CLOSE OVERLAY (closes on ANY click/tap) */}
-      {(selectedCoin || legendOpen) && (
         <div
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            // Close whatever is open, even if you click inside the panel
-            if (selectedCoin) startCloseInfo();
-            if (legendOpen) startCloseLegend();
-          }}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (selectedCoin) startCloseInfo();
-            if (legendOpen) startCloseLegend();
-          }}
           style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 1000000,
-            background: "transparent",
-            touchAction: "manipulation",
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 14,
           }}
-        />
-      )}
-      {/* INFO PANEL */}
-      {selectedCoin && (
-        <>
+        >
           <div
-            data-info-panel
             style={{
-              position: "fixed",
-              left: "50%",
-              bottom: "auto",
-              top: "50%",
-              transform: "translate(-50%, -50%)",
-              width: panelW,
-              height: panelH,
-              zIndex: 999999,
-              fontFamily: "'Press Start 2P', monospace",
-              color: "#ffd87a",
-              textShadow: "0 0 6px rgba(255,215,100,0.6)",
               display: "flex",
-              justifyContent: "center",
+              flexDirection: "column",
               alignItems: "center",
               textAlign: "center",
-              pointerEvents: "auto",
-              animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`,
             }}
-            onClick={(e) => e.stopPropagation()}
           >
-  <div className="woc-panel-inner" style={{ animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`, width: "100%", height: "100%", position: "relative" }}>
-
-  <div className="woc-panel-inner" style={{ animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`, width: "100%", height: "100%", position: "relative" }}>
-
-            <img src="/virgin-border.png" alt="frame" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
-
-            {/* ✅ SAFE ZONE (invisible): 80% of panel, centered */}
-            <div
-              className="woc-text woc-safe"
-              style={{
-                position: "absolute",
-                top: "70%",
-                left: "50%",
-                width: "80%",
-                height: "80%",
-                transform: "translate(-50%, -50%)",
-                overflowY: "auto",
-                overflowX: "hidden",
-                padding: "18px 22px",
-                boxSizing: "border-box",
-                zIndex: 2,
-              }}
-            >
-              <div style={{ marginBottom: 18 }}>
-                <div className="woc-title" style={{ marginBottom: 10 }}>INFO</div>
-                <div>Name: {selectedCoin.name}</div>
-                <div>Mkt Cap: {selectedCoin.capNum > 0 ? `${(selectedCoin.capNum / 1e6).toFixed(2)}M` : "N/A"}</div>
-                <div>Price: {!selectedCoin.price || selectedCoin.price === "$0" ? "N/A" : selectedCoin.price}</div>
-              </div>
-
-              <div style={{ marginBottom: 8 }}>Price variation:</div>
-              <div style={{ marginBottom: 6 }}>
-                1Y: {selectedCoin.pct1y || "N/A"} &nbsp;/&nbsp; 1M: {selectedCoin.pct30 || "N/A"}
-              </div>
-              <div>7D: {selectedCoin.pct7 || "N/A"} &nbsp;/&nbsp; 24H: {selectedCoin.pct24 || "N/A"}</div>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>1H:</div>
+            <div>
+              %:{" "}
+              {panelStats?.h1?.changePct != null
+                ? `${Number(panelStats.h1.changePct).toFixed(2)}%`
+                : "N/A"}
             </div>
-          
-  </div>
+            <div>High: ${fmtPrice(panelStats?.h1?.high)}</div>
+            <div>Low: ${fmtPrice(panelStats?.h1?.low)}</div>
+          </div>
 
-  </div>
-</div>
-        </>
-      )}
-
-      {/* LEGEND PANEL */}
-      {legendOpen && (
-        <>
           <div
-            data-info-panel
             style={{
-              position: "fixed",
-              left: "50%",
-              top: "56%",
-              transform: "translate(-50%, -50%)",
-              width: legendW,
-              height: legendH,
-              zIndex: 999999,
-              fontFamily: "'Press Start 2P', monospace",
-              color: "#ffd87a",
-              textShadow: "0 0 6px rgba(255,215,100,0.6)",
               display: "flex",
-              justifyContent: "center",
+              flexDirection: "column",
               alignItems: "center",
               textAlign: "center",
-              pointerEvents: "auto",
-              animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`,
             }}
-            onClick={(e) => e.stopPropagation()}
           >
-  <div className="woc-panel-inner" style={{ animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`, width: "100%", height: "100%", position: "relative" }}>
-
-            <img src="/virgin-border.png" alt="frame" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
-
-            {/* ✅ SAFE ZONE (invisible): 80% of panel, centered */}
-            <div
-              className="woc-text woc-safe"
-              style={{
-                position: "absolute",
-                top: "75%",
-                left: "50%",
-                width: "80%",
-                height: "80%",
-                transform: "translate(-50%, -50%)",
-                overflowY: "auto",
-                overflowX: "hidden",
-                padding: "18px 22px",
-                boxSizing: "border-box",
-                zIndex: 2,
-                textAlign: "center",
-              }}
-            >
-              <div style={{ marginBottom: 14, textAlign: "center" }}>
-                <div className="woc-title">SCALES & LEGEND</div>
-              </div>
-              <div style={{ marginBottom: 10 }}>
-                <div style={{ marginBottom: 6, textDecoration: "underline" }}>CRYPTO CLUSTERS</div>
-                <div>Organic sizing (continuous) based on market cap.</div>
-              </div>
-              <div style={{ marginBottom: 10 }}>
-                <div style={{ marginBottom: 6, textDecoration: "underline" }}>TTR MATERIALS</div>
-                <div>Core: 100k — rings: Copper → Silver → Gold → Final</div>
-              </div>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>24H:</div>
+            <div>
+              %:{" "}
+              {panelStats?.h24?.changePct != null
+                ? `${Number(panelStats.h24.changePct).toFixed(2)}%`
+                : "N/A"}
             </div>
-          
-  </div>
-</div>
-        </>
-      )}
+            <div>High: ${fmtPrice(panelStats?.h24?.high)}</div>
+            <div>Low: ${fmtPrice(panelStats?.h24?.low)}</div>
+          </div>
+        </div>
+      </div>
     </div>
-  );
+  </div>
+)}
+
+{/* LEGEND PANEL */}
+{legendOpen && (
+  <div
+    data-info-panel
+    onPointerDown={(e) => e.stopPropagation()}
+    style={{
+      position: "fixed",
+      left: "50%",
+      top: "56%",
+      transform: "translate(-50%, -50%)",
+      width: legendW,
+      height: legendH,
+      zIndex: 1000001,
+      fontFamily: "'Press Start 2P', monospace",
+      color: "#ffd87a",
+      textShadow: "0 0 6px rgba(255,215,100,0.6)",
+      display: "flex",
+      justifyContent: "center",
+      alignItems: "center",
+      textAlign: "center",
+      pointerEvents: "auto",
+      animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`,
+    }}
+  >
+    <div
+      className="woc-panel-inner"
+      style={{
+        animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`,
+        width: "100%",
+        height: "100%",
+        position: "relative",
+      }}
+    >
+      <img
+        src="/virgin-border.png"
+        alt="frame"
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+        }}
+      />
+
+      <div
+        className="woc-text woc-safe"
+        style={{
+          position: "absolute",
+          top: "70%",
+          left: "50%",
+          width: "80%",
+          height: "80%",
+          transform: "translate(-50%, -50%)",
+          overflowY: "auto",
+          overflowX: "hidden",
+          padding: "18px 22px",
+          boxSizing: "border-box",
+          zIndex: 2,
+          textAlign: "center",
+        }}
+      >
+        <div style={{ marginBottom: 14 }}>
+          <div className="woc-title">SCALES &amp; LEGEND</div>
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ marginBottom: 6, textDecoration: "underline" }}>
+            CRYPTO CLUSTERS
+          </div>
+          <div>Organic sizing (continuous)</div>
+          <div>Size reflects relative market cap</div>
+          <div>Scales are relative to the active market window</div>
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ marginBottom: 6, textDecoration: "underline" }}>
+            TTR MATERIALS
+          </div>
+          <div>Core starts at 100k market cap</div>
+          <div>Rings evolve with growth milestones</div>
+          <div>Copper → Silver → Gold → Final</div>
+        </div>
+
+        <div>
+          <div style={{ marginBottom: 6, textDecoration: "underline" }}>
+            DATA
+          </div>
+          <div>Live market data</div>
+          <div>Real-time visual scaling</div>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
+
+</div>
+);
 }

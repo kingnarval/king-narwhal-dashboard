@@ -9,8 +9,6 @@ const DEFAULT_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 // RPC fallback (sans clé)
 const RPC_FALLBACKS = [
   "https://api.mainnet-beta.solana.com",
-  "https://solana-api.projectserum.com", // parfois flaky
-  "https://rpc.ankr.com/solana",         // souvent 403 sans clé (on le laisse mais on skip si 403)
 ];
 
 // Cache RAM (per mint/quote/poolType)
@@ -69,8 +67,84 @@ async function fetchJson(url, { timeoutMs = 8000, tries = 3 } = {}) {
 
   throw lastErr || new Error("fetch failed");
 }
+async function getSolUsdPrice() {
+  const urlPools =
+    `${RAYDIUM_V3}/pools/info/mint` +
+    `?mint1=${encodeURIComponent("So11111111111111111111111111111111111111112")}` +
+    `&mint2=${encodeURIComponent("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")}` +
+    `&poolType=all&poolSortField=default&sortType=desc&pageSize=30&page=1`;
+
+  const poolsJson = await fetchJson(urlPools, { timeoutMs: 9000, tries: 3 });
+  const candidates = poolsJson?.data?.data || poolsJson?.data || [];
+  const best = pickBestPool(candidates);
+  const poolId = best?.id;
+  if (!poolId) throw new Error("No WSOL/USDC pool found on Raydium");
+
+  const urlPoolInfo = `${RAYDIUM_V3}/pools/info/ids?ids=${encodeURIComponent(poolId)}`;
+  const poolInfoJson = await fetchJson(urlPoolInfo, { timeoutMs: 9000, tries: 3 });
+  const poolInfo = poolInfoJson?.data?.data?.[0] || poolInfoJson?.data?.[0] || null;
+
+  const rawPrice =
+    num(poolInfo?.price) ??
+    num(poolInfo?.poolPrice) ??
+    num(best?.price) ??
+    null;
+
+  if (!rawPrice || rawPrice <= 0) throw new Error("SOL/USD price unavailable from Raydium");
+
+  const { aMint, bMint } = extractMints(poolInfo || best || {});
+  const A = lc(aMint);
+  const B = lc(bMint);
+  const M = lc("So11111111111111111111111111111111111111112");
+  const Q = lc("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+
+  let solUsd = rawPrice;
+  if (A && B) {
+    if (A === M && B === Q) {
+      solUsd = rawPrice;
+    } else if (A === Q && B === M) {
+      solUsd = 1 / rawPrice;
+    }
+  }
+  if (!Number.isFinite(solUsd) || solUsd <= 0) throw new Error("Invalid SOL/USD computed price");
+  return solUsd;
+}
+
 
 // Try to detect which mint is base/quote in Raydium payload
+function poolScore(p) {
+  const candidates = [
+    p?.tvl,
+    p?.tvlUsd,
+    p?.liquidity,
+    p?.liquidityUsd,
+    p?.reserveUsd,
+    p?.volume24h,
+    p?.volume24hQuote,
+    p?.day?.volume,
+    p?.day?.volumeQuote,
+  ];
+  for (const v of candidates) {
+    const n = typeof v === "string" ? Number(v) : v;
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
+}
+
+function pickBestPool(list) {
+  if (!Array.isArray(list) || list.length === 0) return null;
+  let best = list[0];
+  let bestScore = poolScore(best);
+  for (let i = 1; i < list.length; i++) {
+    const s = poolScore(list[i]);
+    if (s > bestScore) {
+      bestScore = s;
+      best = list[i];
+    }
+  }
+  return best;
+}
+
 function extractMints(obj) {
   const tries = [
     ["mintA", "mintB"],
@@ -194,10 +268,11 @@ export default async function handler(req, res) {
       `?mint1=${encodeURIComponent(mint)}` +
       `&mint2=${encodeURIComponent(quoteMint)}` +
       `&poolType=${encodeURIComponent(poolType)}` +
-      `&poolSortField=default&sortType=desc&pageSize=1&page=1`;
+      `&poolSortField=default&sortType=desc&pageSize=30&page=1`;
 
     const poolsJson = await fetchJson(urlPools, { timeoutMs: 9000, tries: 3 });
-    const best = poolsJson?.data?.data?.[0] || poolsJson?.data?.[0] || null;
+    const candidates = poolsJson?.data?.data || poolsJson?.data || [];
+    const best = pickBestPool(candidates);
     const poolId = best?.id;
 
     if (!poolId) {
@@ -226,6 +301,8 @@ export default async function handler(req, res) {
         ok: false,
         error: "Price unavailable from Raydium pool",
         poolId,
+      poolScore: best ? poolScore(best) : 0,
+      candidatesCount: Array.isArray(candidates) ? candidates.length : 0,
       });
     }
 
@@ -258,7 +335,19 @@ export default async function handler(req, res) {
     }
 
     // 5) market cap
-    const marketCap = price * supply;
+    let priceUsd = price;
+    let quoteType = "USD";
+    if (lc(quoteMint) === lc("So11111111111111111111111111111111111111112")) {
+      try {
+        const solUsd = await getSolUsdPrice();
+        priceUsd = price * solUsd;
+        quoteType = "WSOL->USD";
+      } catch (e) {
+        quoteType = "WSOL (unconverted)";
+      }
+    }
+
+    const marketCap = priceUsd * supply;
 
     const payload = {
       ok: true,
@@ -269,6 +358,8 @@ export default async function handler(req, res) {
       poolId,
       rawPrice,
       price,
+      priceUsd,
+      quoteType,
       inverted,
       supply,
       supplyUiString,
