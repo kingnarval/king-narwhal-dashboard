@@ -9,8 +9,10 @@ import React from 'react';
 export default function ActionButtons({ 
   infoHover,
   xHover,
+  pumpHover,
   setInfoHover,
   setXHover,
+  setPumpHover,
   onInfoClick,
   layoutConfig
 }) {
@@ -26,6 +28,13 @@ export default function ActionButtons({
     close: {
       bottomPx: 30,
       rightPx: 115,
+      scale: 1,
+      sizePx: 70,
+      zIndex: 100,
+    },
+    pump: {
+      bottomPx: 30,
+      rightPx: 245,
       scale: 1,
       sizePx: 70,
       zIndex: 100,
@@ -64,6 +73,39 @@ export default function ActionButtons({
           draggable={false}
         />
       </div>
+
+      {/* PUMP button */}
+      <a
+        data-btn="pump"
+        href="https://pump.fun/coin/JAqbCrfSgN6rjXqJZ1KLC8Se3DU1BP1JoK2eAiDMpump"
+        target="_blank"
+        rel="noreferrer"
+        onMouseEnter={() => setPumpHover(true)}
+        onMouseLeave={() => setPumpHover(false)}
+        onTouchStart={() => setPumpHover(true)}
+        onTouchEnd={() => setPumpHover(false)}
+        style={{
+          position: 'absolute',
+          bottom: `${buttons.pump.bottomPx}px`,
+          right: `${buttons.pump.rightPx}px`,
+          zIndex: buttons.pump.zIndex,
+          width: `${buttons.pump.sizePx}px`,
+          height: `${buttons.pump.sizePx}px`,
+          transform: `scale(${buttons.pump.scale})`,
+          transformOrigin: "50% 50%",
+          cursor: 'pointer',
+          touchAction: 'manipulation',
+        }}
+        title="Pump.fun"
+      >
+        <img
+          src={pumpHover ? '/btn-pump-hover.png' : '/btn-pump.png'}
+          alt="Pump"
+          className="woc-icon-btn"
+          style={{ width: '100%', height: '100%' }}
+          draggable={false}
+        />
+      </a>
 
       {/* X button */}
       <a

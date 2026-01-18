@@ -736,6 +736,7 @@ export default function Home() {
   const titleS = getTitleStyles(layout);
   const infoBtnS = getButtonStyles(layout, "info");
   const closeBtnS = getButtonStyles(layout, "close");
+  const pumpBtnS = getButtonStyles(layout, "pump");
   const statusS = getStatusBarStyles(layout);
   const videoS = getVideoStyles(layout);
 
@@ -781,6 +782,7 @@ export default function Home() {
   // Hover states (image swap)
   const [infoHover, setInfoHover] = useState(false);
   const [xHover, setXHover] = useState(false);
+  const [pumpHover, setPumpHover] = useState(false);
 
   // Birdeye stats for INFO panel (1H / 24H + High/Low)
   const [panelStats, setPanelStats] = useState(null);
@@ -2074,6 +2076,33 @@ return (
     draggable={false}
   />
 </div>
+
+{/* PUMP button */}
+<a
+  href="https://pump.fun/coin/JAqbCrfSgN6rjXqJZ1KLC8Se3DU1BP1JoK2eAiDMpump"
+  target="_blank"
+  rel="noreferrer"
+  onMouseEnter={() => setPumpHover(true)}
+  onMouseLeave={() => setPumpHover(false)}
+  onTouchStart={() => setPumpHover(true)}
+  onTouchEnd={() => setPumpHover(false)}
+  style={{
+    position: "absolute",
+    ...pumpBtnS,
+    transform: `scale(${(layout.buttons?.pump?.scale || 1) * (textCfg.globalScale || 1)})`,
+    cursor: "pointer",
+    touchAction: "manipulation",
+  }}
+  title="Pump.fun"
+>
+  <img
+    src={pumpHover ? "/btn-pump-hover.png" : "/btn-pump.png"}
+    alt="Pump"
+    className="woc-icon-btn"
+    style={{ width: "100%", height: "100%" }}
+    draggable={false}
+  />
+</a>
 
 {/* X button */}
 <a
