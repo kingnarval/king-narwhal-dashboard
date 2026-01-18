@@ -1,8 +1,8 @@
 // useDynamicStageFull.js
 // -----------------------------------------------------------------------------
-// War of Coins – Dynamic Stage Manager (stable Tahlia version)
+// War of Coins â€“ Dynamic Stage Manager (stable Tahlia version)
 // - Support Live Pump.fun + simulation fallback
-// - minStage lock (empêche de redescendre sous le Stage 3)
+// - minStage lock (empÃªche de redescendre sous le Stage 3)
 // - 100 % sans boucle infinie (interval propre)
 // -----------------------------------------------------------------------------
 
@@ -17,7 +17,7 @@ const PUMP_COIN_URL = `https://frontend-api.pump.fun/coins/${TTR_ADDRESS}`;
 export const STAGES = {
   3: {
     id: 3,
-    label: "Stage 3 – Early Realm",
+    label: "Stage 3 â€“ Early Realm",
     ttrBase: 400_000,
     opponents: [150_000, 250_000, 350_000],
     capMin: 100_000,
@@ -27,7 +27,7 @@ export const STAGES = {
   },
   2: {
     id: 2,
-    label: "Stage 2 – Mid Realm",
+    label: "Stage 2 â€“ Mid Realm",
     ttrBase: 1_000_000,
     opponents: [2_000_000, 6_000_000, 12_000_000],
     capMin: 500_000,
@@ -37,7 +37,7 @@ export const STAGES = {
   },
   1: {
     id: 1,
-    label: "Stage 1 – Prime Realm",
+    label: "Stage 1 â€“ Prime Realm",
     ttrBase: 1_000_000,
     opponents: [12_000_000, 26_000_000, 62_000_000],
     capMin: 1_000_000,
@@ -229,7 +229,7 @@ const LS_STAGE = "woc_stage_state_v8";
 const LS_SIMCAP = "woc_ttr_sim_cap_v2";
 
 export function useDynamicStageFull(initialStage = 3, initialSimCap = 400_000, options = {}) {
-  const minStage = options.minStage ?? 3; // verrou minimal (Stage 3 par défaut)
+  const minStage = options.minStage ?? 3; // verrou minimal (Stage 3 par dÃ©faut)
 
   const [state, dispatch] = React.useReducer(stageReducer, null, () => {
     try {
@@ -282,7 +282,7 @@ export function useDynamicStageFull(initialStage = 3, initialSimCap = 400_000, o
     let next = shouldPromote(state);
     let prev = shouldDemote(state);
 
-    // 🔒 clamp vers le minStage
+    // ðŸ”’ clamp vers le minStage
     if (minStage) {
       if (next && next < minStage) next = null;
       if (prev && prev < minStage) prev = null;
@@ -292,7 +292,7 @@ export function useDynamicStageFull(initialStage = 3, initialSimCap = 400_000, o
     else if (prev) dispatch({ type: ACTIONS.DEMOTE, prevStage: prev });
   }, [state, minStage]);
 
-  // Contrôles manuels (T/G)
+  // ContrÃ´les manuels (T/G)
   React.useEffect(() => {
     const onKey = (e) => {
       const k = e.key?.toLowerCase?.();
@@ -303,7 +303,7 @@ export function useDynamicStageFull(initialStage = 3, initialSimCap = 400_000, o
     return () => document.removeEventListener("keydown", onKey, true);
   }, []);
 
-  // 🔁 Live update stable (setInterval)
+  // ðŸ” Live update stable (setInterval)
   React.useEffect(() => {
     const fetchAndUpdate = async () => {
       try {
@@ -327,7 +327,7 @@ export function useDynamicStageFull(initialStage = 3, initialSimCap = 400_000, o
     };
 
     fetchAndUpdate();
-    const interval = setInterval(fetchAndUpdate, 30000); // 30s pour éviter toute charge excessive
+    const interval = setInterval(fetchAndUpdate, 30000); // 30s pour Ã©viter toute charge excessive
     return () => clearInterval(interval);
   }, [tick, autoAdvance, ttrCap]);
 

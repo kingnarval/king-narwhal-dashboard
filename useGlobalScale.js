@@ -1,36 +1,54 @@
-import { useEffect, useState } from "react";
-
-/**
- * Hook global – gère l’échelle de toute la scène War of Coins
- * Basé sur une résolution de référence 1920x1080
- * Ajuste automatiquement au redimensionnement de la fenêtre
- */
+// useGlobalScale.js
+import { useState, useEffect } from "react";
+import { LAYOUT } from "./lib/utils/layoutPresets";
 
 export function useGlobalScale() {
-  const [scale, setScale] = useState({ x: 1, y: 1 });
+  const [state, setState] = useState({
+    x: 1,
+    y: 1,
+    mode: "pc_land",
+    offsetX: 0,
+    offsetY: 0,
+    baseW: 1920,
+    baseH: 1080,
+  });
 
   useEffect(() => {
-    function updateScale() {
-      const baseW = 1920;
-      const baseH = 1080;
-      const w = window.innerWidth;
-      const h = window.innerHeight;
+    function update() {
+      if (typeof window === "undefined") return;
 
-      // Calcule l’échelle relative à la taille de l’écran
-      const scaleX = w / baseW;
-      const scaleY = h / baseH;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
 
-      // 🔧 Zoom global : ajuste ici pour réduire ou agrandir toute la scène
-      const globalZoom = 1; // <— tu peux changer cette valeur (ex: 0.95, 0.8…)
+      const mode = vw >= vh ? "pc_land" : "pc_port";
+      const L = LAYOUT?.[mode] || LAYOUT?.pc_land;
 
-      setScale({ x: scaleX * globalZoom, y: scaleY * globalZoom });
+      const baseW = Number(L?.base?.width || 1920);
+      const baseH = Number(L?.base?.height || 1080);
+
+      // v1 behavior: STAGE scale is the single source of truth
+      const x = vw / baseW;
+      const y = vh / baseH;
+
+      setState({
+        x,
+        y,
+        mode,
+        offsetX: Number(L?.world?.offsetX || 0),
+        offsetY: Number(L?.world?.offsetY || 0),
+        baseW,
+        baseH,
+      });
     }
 
-    updateScale();
-    window.addEventListener("resize", updateScale);
-    return () => window.removeEventListener("resize", updateScale);
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("orientationchange", update);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("orientationchange", update);
+    };
   }, []);
 
-  return scale;
-
+  return state;
 }

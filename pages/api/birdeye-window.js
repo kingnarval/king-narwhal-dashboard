@@ -44,10 +44,11 @@ export default async function handler(req, res) {
   }
 
   // Buckets market cap
+  /* SUPPRIMÉ : ranges text overlay "0.5–2M | 2–10M | 10–50M" */
   const CAP_BUCKETS = [
-    { min: 500_000, max: 2_000_000, label: "0.5–2M" },
-    { min: 2_000_000, max: 10_000_000, label: "2–10M" },
-    { min: 10_000_000, max: 50_000_000, label: "10–50M" },
+    { min: 500_000, max: 2_000_000, label: "" },
+    { min: 2_000_000, max: 10_000_000, label: "" },
+    { min: 10_000_000, max: 50_000_000, label: "" },
   ];
 
   const LIMIT = 100;
@@ -175,7 +176,7 @@ export default async function handler(req, res) {
         );
 
         const payload = {
-          source: `Birdeye STABLE ${CAP_BUCKETS.map((b) => b.label).join(" | ")} (${CHAIN})`,
+          source: `Birdeye STABLE (${CHAIN})`,
           coins,
           meta: {
             returned: coins.length,

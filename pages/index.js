@@ -12,13 +12,227 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import * as d3 from "d3";
 import { hexbin as d3Hexbin } from "d3-hexbin";
-import { useGlobalScale } from "../useGlobalScale";
+import { LAYOUT, detectLayoutMode } from "../lib/utils/layoutPresets";
 
 // ============================================================================
 // Constantes
 // ============================================================================
+
 const BASE_W = 1920;
 const BASE_H = 1080;
+
+// ============================================================================
+// LAYOUT DRIVER (v1 reactive + layoutPresets as MASTER)
+// ============================================================================
+
+// ============================================================================
+// LAYOUT DRIVER v2 - Expose ALL layout elements individually
+// ============================================================================
+const clamp01 = (v, min, max) => Math.max(min, Math.min(max, v));
+
+function useLayoutDriver() {
+  const [state, setState] = useState(() => {
+    const mode = 'pc_land';
+    const L = LAYOUT?.[mode] || {};
+    
+    return {
+      // ✅ BACKWARD COMPATIBILITY: Keep old properties at root level
+      x: 1,
+      y: 1,
+      offsetX: 0,
+      offsetY: 0,
+      rotateDeg: 0,
+      mode,
+      L,
+      
+      // NEW: WORLD transform (global UI positioning)
+      world: {
+        x: 1,
+        y: 1,
+        offsetX: 0,
+        offsetY: 0,
+        rotateDeg: 0,
+      },
+      
+      // NEW: All independent elements from layout
+      border: L.border || {},
+      title: L.title || {},
+      buttons: L.buttons || {},
+      panels: L.panels || {},
+      text: L.text || {},
+      statusBar: L.statusBar || {},
+      video: L.video || {},
+      safezone: L.safezone || {},
+    };
+  });
+
+  useEffect(() => {
+    function update() {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+
+      const mode = detectLayoutMode(vw, vh);
+      const L = LAYOUT?.[mode] || LAYOUT?.pc_land || {};
+      const W = L?.world || {};
+
+      const sxBase = vw / BASE_W;
+      const syBase = vh / BASE_H;
+
+      const minS = Number.isFinite(W.min) ? W.min : 0;
+      const maxS = Number.isFinite(W.max) ? W.max : 10;
+
+      const x = clamp01(sxBase * (Number.isFinite(W.mulX) ? W.mulX : 1), minS, maxS);
+      const y = clamp01(syBase * (Number.isFinite(W.mulY) ? W.mulY : 1), minS, maxS);
+      const offsetX = Number.isFinite(W.offsetX) ? W.offsetX : 0;
+      const offsetY = Number.isFinite(W.offsetY) ? W.offsetY : 0;
+      const rotateDeg = Number.isFinite(W.rotateDeg) ? W.rotateDeg : 0;
+
+      setState({
+        // ✅ BACKWARD COMPATIBILITY: Keep old properties at root level
+        x,
+        y,
+        offsetX,
+        offsetY,
+        rotateDeg,
+        mode,
+        L,
+        
+        // NEW: WORLD transform
+        world: {
+          x,
+          y,
+          offsetX,
+          offsetY,
+          rotateDeg,
+        },
+        
+        // NEW: All independent elements from layout
+        border: L.border || {},
+        title: L.title || {},
+        buttons: L.buttons || {},
+        panels: L.panels || {},
+        text: L.text || {},
+        statusBar: L.statusBar || {},
+        video: L.video || {},
+        safezone: L.safezone || {},
+      });
+    }
+
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('orientationchange', update);
+    
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('orientationchange', update);
+    };
+  }, []);
+
+  return state;
+}
+
+// ============================================================================
+// HELPER FUNCTIONS to apply layout values to elements
+// ============================================================================
+
+function getBorderStyles(layout) {
+  const b = layout.border || {};
+  return {
+    top: b.topPx != null ? `${b.topPx}px` : '0px',
+    left: b.leftPct != null ? `${b.leftPct}%` : '50%',
+    width: b.widthBasePct != null 
+      ? `calc(${b.widthBasePct}% + ${b.widthExtraPx || 0}px)` 
+      : '100%',
+    height: b.heightPct != null ? `${b.heightPct}%` : '100%',
+    transform: `translate(calc(-50% + ${b.nudgeXpx || 0}px), 0) ${b.rotateDeg ? `rotate(${b.rotateDeg}deg)` : ''}`,
+    zIndex: b.zIndex || 35,
+  };
+}
+
+function getTitleStyles(layout) {
+  const t = layout.title || {};
+  return {
+    top: t.topPct != null ? `${t.topPct}%` : '0%',
+    left: t.leftPct != null ? `${t.leftPct}%` : '50%',
+    width: t.widthPct != null ? `${t.widthPct}%` : 'auto',
+    transform: `translate(calc(-50% + ${t.nudgeXpx || 0}px), -50%)`,
+    zIndex: t.zIndex || 40,
+  };
+}
+
+function getButtonStyles(layout, buttonType) {
+  const btn = layout.buttons?.[buttonType] || {};
+  return {
+    bottom: btn.bottomPx != null ? `${btn.bottomPx}px` : '40px',
+    right: btn.rightPx != null ? `${btn.rightPx}px` : '10px',
+    width: btn.sizePx != null ? `${btn.sizePx}px` : '70px',
+    height: btn.sizePx != null ? `${btn.sizePx}px` : '70px',
+    transform: `scale(${btn.scale || 1})`,
+    zIndex: btn.zIndex || 100,
+  };
+}
+
+function getPanelStyles(layout, panelType) {
+  const p = layout.panels?.[panelType] || {};
+  return {
+    width: p.widthPx != null ? `${p.widthPx}px` : '900px',
+    height: p.heightPx != null ? `${p.heightPx}px` : '680px',
+    top: p.topPct != null ? `${p.topPct}%` : '50%',
+    fontSize: p.fontSize != null ? `${p.fontSize}px` : '14px',
+    paddingTop: p.paddingTop != null ? `${p.paddingTop}px` : '18px',
+    paddingX: p.paddingX != null ? `${p.paddingX}px` : '22px',
+    paddingBottom: p.paddingBottom != null ? `${p.paddingBottom}px` : '22px',
+    safeAreaWidth: p.safeAreaWidth || '80%',
+    safeAreaHeight: p.safeAreaHeight || '70%',
+    textAlign: p.textAlign || 'center',
+  };
+}
+
+function getStatusBarStyles(layout) {
+  const s = layout.statusBar || {};
+  return {
+    bottom: s.bottomPx != null ? `${s.bottomPx}px` : '0px',
+    left: s.leftPx != null ? `${s.leftPx}px` : '0px',
+    fontSize: s.fontSize != null ? `${s.fontSize}px` : '11px',
+    transform: `scale(${s.fontScale || 1})`,
+    zIndex: s.zIndex || 100,
+  };
+}
+
+function getVideoStyles(layout) {
+  const v = layout.video || {};
+  return {
+    opacity: v.opacity != null ? v.opacity : 0.45,
+    transform: `scale(${v.scale || 1}) ${v.rotateDeg ? `rotate(${v.rotateDeg}deg)` : ''}`,
+    filter: `brightness(${v.brightness || 1}) blur(${v.blur || 0}px)`,
+    zIndex: v.zIndex || 0,
+  };
+}
+
+function getSafezoneConfig(layout) {
+  const s = layout.safezone || {};
+  return {
+    scaleX: s.base?.scaleX || 2.0,
+    scaleY: s.base?.scaleY || 1.13,
+    scaleGlobal: s.base?.scaleGlobal || 0.72,
+    radius: s.base?.radius || 80,
+    offsetX: s.offset?.x || 20,
+    offsetY: s.offset?.y || 0,
+  };
+}
+
+function getTextConfig(layout) {
+  const t = layout.text || {};
+  return {
+    globalScale: t.globalScale || 1,
+    titleScale: t.titleScale || 1,
+    panelScale: t.panelScale || 1,
+    legendScale: t.legendScale || 1,
+    statusScale: t.statusScale || 1,
+    lineHeight: t.lineHeight || 1.25,
+  };
+}
+
 
 const SCALE_SWITCH_CAP = 10_000_000;
 
@@ -201,6 +415,18 @@ const TTR_CORE_VALUE = 100_000;
 // ============================================================================
 // Helpers
 // ============================================================================
+function normalizePrice(v) {
+  if (v == null) return null;
+  if (typeof v === "number") return v;
+  if (typeof v === "string") {
+    // accepts "$0.00123", "0.00123", "€0.00123" etc.
+    const n = Number(v.replace(/[^0-9.]/g, ""));
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+
 const keyOf = (q, r) => `${q},${r}`;
 
 function fmtPrice(v, maxDecimals = 8) {
@@ -496,7 +722,22 @@ export default function Home() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  const { x, y } = useGlobalScale();
+  // Layout driver (portrait/landscape) — single source of truth
+  const layout = useLayoutDriver();
+  const { x, y, offsetX, offsetY, rotateDeg, L, mode } = layout;
+
+  // Panel + text config from layoutPresets
+  const infoP = getPanelStyles(layout, "info");
+  const legendP = getPanelStyles(layout, "legend");
+  const textCfg = getTextConfig(layout);
+
+  // All other UI elements driven by layoutPresets
+  const borderS = getBorderStyles(layout);
+  const titleS = getTitleStyles(layout);
+  const infoBtnS = getButtonStyles(layout, "info");
+  const closeBtnS = getButtonStyles(layout, "close");
+  const statusS = getStatusBarStyles(layout);
+  const videoS = getVideoStyles(layout);
 
   const [refreshing, setRefreshing] = useState(false);
   const [cooldownLeft, setCooldownLeft] = useState(0);
@@ -587,41 +828,123 @@ export default function Home() {
     const style = document.createElement("style");
     style.setAttribute("data-mobile-ui-fix", "true");
 
+    // Mobile preset: font auto-scales with viewport (vmin) so it never spills outside in landscape.
     style.innerHTML = `
-      @media (max-width: 900px) {
-        [data-info-panel] {
-          position: fixed !important;
-          top: 50% !important;
-          left: 50% !important;
-          right: auto !important;
-          bottom: auto !important;
-          transform: translate(-50%, -50%) !important;
+@media (max-width: 900px) and (max-height: 500px) {
+  /* ================================
+     SYSTEM 2 — SCALES & LEGEND ONLY
+     (independent from INFO)
+     Nothing can escape the virgin-border.
+  ================================= */
+  [data-legend-panel]{ overflow: hidden !important; box-sizing: border-box !important; }
+  [data-legend-panel] .woc-panel-inner{ overflow: hidden !important; min-height: 0 !important; }
+  /* Keep panels clipped; scrolling happens only inside text zones */
+  [data-info-panel],
+  [data-scale-panel],
+  [data-legend-panel] {
+    overflow: hidden !important;
+    box-sizing: border-box !important;
+  }
 
-          width: min(92vw, 560px) !important;
-          max-width: 92vw !important;
-          height: 90vh !important;
-          max-height: 90vh !important;
+  /* ✅ Text safe zones (INFO / SCALE / LEGEND) */
+  /* ✅ SCALE text safe-zone (independent from INFO) */
+[data-scale-panel] .scale-text-zone {
+  width: var(--wocTextW, 100%) !important;
+  max-width: var(--wocTextW, 100%) !important;
+  height: var(--wocTextH, 100%) !important;
+  max-height: var(--wocTextH, 100%) !important;
+  margin: 0 auto !important;
 
-          overflow: hidden !important;
-          -webkit-overflow-scrolling: touch !important;
+  padding: 12px 14px !important;
 
-          box-sizing: border-box !important;
-          z-index: 999999 !important;
-        }
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  overscroll-behavior: contain !important;
+  -webkit-overflow-scrolling: touch !important;
 
-        [data-info-panel] * { box-sizing: border-box !important; }
+  box-sizing: border-box !important;
+  min-height: 0 !important;
 
-        [data-info-panel] .woc-title{
-          font-size: clamp(16px, 4.4vw, 22px) !important;
-          line-height: 1.2 !important;
-        }
+  overflow-wrap: anywhere !important;
+  word-break: break-word !important;
+  hyphens: auto !important;
 
-        [data-info-panel] .woc-text{
-          font-size: clamp(13px, 3.6vw, 16px) !important;
-          line-height: 1.35 !important;
-        }
-      }
-    `;
+  /* ✅ Removed !important - let layout presets control font size */
+  line-height: 1.28;
+  display: block !important;
+}
+
+/* Ensure inner containers don't vertically center content */
+  /* ✅ Keep SCALE/LEGEND content pinned to top (independent from INFO) */
+[data-scale-panel] .woc-panel-inner,
+[data-legend-panel] .woc-panel-inner {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: flex-start !important;
+  align-items: stretch !important;
+  min-height: 0 !important;
+}
+/* ✅ Removed !important from font-size - let layout presets + scale control it */
+  [data-info-panel] .woc-title,
+  [data-scale-panel] .woc-title,
+  [data-legend-panel] .woc-title{
+    line-height: 1.15;
+  }
+  [data-info-panel] .woc-text,
+  [data-scale-panel] .woc-text,
+  [data-legend-panel] .woc-text{
+    line-height: 1.25;
+  }
+}
+
+/* ✅ Landscape */
+@media (max-width: 900px) and (orientation: landscape) {
+  /* ✅ SCALE text safe-zone (independent from INFO) */
+[data-scale-panel] .scale-text-zone {
+  width: var(--wocTextW, 100%) !important;
+  max-width: var(--wocTextW, 100%) !important;
+  height: var(--wocTextH, 100%) !important;
+  max-height: var(--wocTextH, 100%) !important;
+  margin: 0 auto !important;
+
+  padding: 12px 14px !important;
+
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  overscroll-behavior: contain !important;
+  -webkit-overflow-scrolling: touch !important;
+
+  box-sizing: border-box !important;
+  min-height: 0 !important;
+
+  overflow-wrap: anywhere !important;
+  word-break: break-word !important;
+  hyphens: auto !important;
+
+  /* ✅ Removed !important - let layout presets control font size */
+  line-height: 1.28;
+  display: block !important;
+}
+
+/* ================================
+   LEGEND — SINGLE SOURCE OF TRUTH
+   Layout (position/top/transform) is handled by JSX inline styles ONLY.
+   This CSS only ensures safe scrolling + wrapping.
+================================ */
+[data-legend-panel] .legend-text-zone{
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  -webkit-overflow-scrolling: touch !important;
+  overscroll-behavior: contain !important;
+  box-sizing: border-box !important;
+  min-height: 0 !important;
+  overflow-wrap: anywhere !important;
+  word-break: break-word !important;
+  hyphens: auto !important;
+}
+
+`;
+
 
     document.head.appendChild(style);
     return () => style.remove();
@@ -1015,7 +1338,17 @@ const coinsSig = useMemo(() => {
   useEffect(() => {
     if (!mounted) return;
 
-    const renderKey = `${coinsSig}__${Math.round(Number(ttrCap || 0))}__${showDebug ? 1 : 0}__${Number(x).toFixed(4)}__${Number(y).toFixed(4)}`;
+    // ✅ Fix 1: Include safezone in renderKey to force rerender when safezone changes
+    const sz = getSafezoneConfig(layout);
+    const szSig = `${sz.scaleX}_${sz.scaleY}_${sz.scaleGlobal}_${sz.radius}_${sz.offsetX}_${sz.offsetY}`;
+
+    // ✅ Map rotation for portrait mode
+    const MAP_ROT = (mode === "port" || String(mode).includes("port")) ? 90 : 0;
+    const MAP_S = MAP_ROT ? (BASE_H / BASE_W) : 1; // 1080/1920 = 0.5625 to prevent clipping
+    const CX = BASE_W / 2;
+    const CY = BASE_H / 2;
+
+    const renderKey = `${coinsSig}__${Math.round(Number(ttrCap || 0))}__${showDebug ? 1 : 0}__${Number(x).toFixed(4)}__${Number(y).toFixed(4)}__SZ:${szSig}__${mode}__MR:${MAP_ROT}`;
     if (renderKeyRef.current === renderKey) return;
     renderKeyRef.current = renderKey;
 
@@ -1046,6 +1379,15 @@ gridOutline.append("feDropShadow")
   .attr("stdDeviation", 2.2)
   .attr("flood-color", "rgba(0,0,0,0.55)");
 
+    // ✅ Create worldG group for map rotation (portrait mode only)
+    const worldG = svg.append("g").attr("class", "world-map");
+    
+    if (MAP_ROT) {
+      worldG.attr(
+        "transform",
+        `translate(${CX},${CY}) rotate(${MAP_ROT}) scale(${MAP_S}) translate(${-CX},${-CY})`
+      );
+    }
 
     const myRenderId = ++renderIdRef.current;
     const isStale = () => myRenderId !== renderIdRef.current;
@@ -1081,7 +1423,7 @@ gridOutline.append("feDropShadow")
       }
     }
 
-   svg.append("g")
+   worldG.append("g")
   .attr("class", "hex-grid")
   .selectAll("path")
   .data(hexList)
@@ -1103,11 +1445,16 @@ gridOutline.append("feDropShadow")
     const centerXGrid = ttrHex.x;
     const centerYGrid = ttrHex.y;
 
-    const baseSize = Math.min(width, height) * SAFEZONE_BASE.scaleGlobal;
-    const rectW = baseSize * SAFEZONE_BASE.scaleX;
-    const rectH = baseSize * SAFEZONE_BASE.scaleY;
-    const rectX = centerXGrid - rectW / 2 + SAFEZONE_OFFSET.x;
-    const rectY = centerYGrid - rectH / 2 + SAFEZONE_OFFSET.y;
+    // ✅ Fix 2: Use getSafezoneConfig for 100% preset control
+    const SZ = getSafezoneConfig(layout);
+
+    // ✅ Compensate for map scale in portrait so preset values remain logical
+    const mapScale = MAP_ROT ? (BASE_H / BASE_W) : 1; // 0.5625 in portrait, 1 in landscape
+    const baseSize = Math.min(width, height) * (SZ.scaleGlobal / mapScale);
+    const rectW = baseSize * SZ.scaleX;
+    const rectH = baseSize * SZ.scaleY;
+    const rectX = centerXGrid - rectW / 2 + SZ.offsetX;
+    const rectY = centerYGrid - rectH / 2 + SZ.offsetY;
 
     const marginHex = hexRadius;
     const rectSafeX = rectX + marginHex;
@@ -1134,16 +1481,31 @@ gridOutline.append("feDropShadow")
       `;
     }
 
-    const safeZonePath = roundedRectPath(rectX, rectY, rectW, rectH, SAFEZONE_BASE.radius);
+    const safeZonePath = roundedRectPath(rectX, rectY, rectW, rectH, SZ.radius);
 
     const defsOverlay = svg.append("defs");
-    defsOverlay.append("mask").attr("id", "mask-outside").html(`
-      <rect width="${width}" height="${height}" fill="white" />
-      <path d="${safeZonePath}" fill="black" />
-    `);
+    
+    // ✅ Fix mask coordinate system - use userSpaceOnUse for pixel coordinates
+    const mask = defsOverlay
+      .append("mask")
+      .attr("id", "mask-outside")
+      .attr("maskUnits", "userSpaceOnUse")
+      .attr("maskContentUnits", "userSpaceOnUse");
+
+    mask.append("rect")
+      .attr("x", 0)
+      .attr("y", 0)
+      .attr("width", width)
+      .attr("height", height)
+      .attr("fill", "white");
+
+    mask.append("path")
+      .attr("d", safeZonePath)
+      .attr("fill", "black");
+    
     defsOverlay.append("filter").attr("id", "blur8").append("feGaussianBlur").attr("stdDeviation", 8);
 
-    svg.append("rect")
+    worldG.append("rect")
       .attr("width", width)
       .attr("height", height)
       .attr("fill", "rgba(8,10,18,0.6)")
@@ -1151,7 +1513,7 @@ gridOutline.append("feDropShadow")
       .attr("mask", "url(#mask-outside)");
 
     if (showDebug) {
-      svg.append("path")
+      worldG.append("path")
         .attr("d", safeZonePath)
         .attr("fill", "none")
         .attr("stroke", "#ff4040")
@@ -1243,7 +1605,7 @@ gridOutline.append("feDropShadow")
       // Show ONLY: unlocked hexes + the next "locked" hex (one at a time)
       // Example: [unlock, unlock, unlock] + [next lock]
       // =============================================================
-      const ttrGroup = svg.append("g").attr("class", "ttr-materials");
+      const ttrGroup = worldG.append("g").attr("class", "ttr-materials");
 
       // Determine ring material for a given distance (same logic as materials compute)
       function keyForRingDist(dist) {
@@ -1339,7 +1701,7 @@ gridOutline.append("feDropShadow")
           .attr("stop-color", d3.color(c.color).darker(2))
           .attr("stop-opacity", 0.85);
 
-        const g = svg
+        const g = worldG
           .append("g")
           .attr("class", `cluster-${c.id} cluster-breath`)
           .style("opacity", 1);
@@ -1393,6 +1755,7 @@ gridOutline.append("feDropShadow")
           .attr("height", 48)
           .attr("x", Math.round(c.centerX - 24))
           .attr("y", Math.round(c.centerY - 24))
+          .attr("transform", MAP_ROT ? `rotate(${-MAP_ROT}, ${c.centerX}, ${c.centerY})` : null)
           .style("cursor", "pointer")
           .style("pointer-events", "all");
 
@@ -1442,7 +1805,7 @@ gradTTR.append("stop")
         pct24: "N/A",
       };
 
-      const ttr = svg.append("g")
+      const ttr = worldG.append("g")
   .attr("class", "ttr-core")
   .style("cursor", "pointer");
 
@@ -1466,13 +1829,14 @@ ttrHalo.append("circle")
   .attr("fill", "url(#grad-ttr-halo)")
   .attr("opacity", 0.28);
 
-// IMAGE (FIXE)
+// IMAGE (FIXE) - with counter-rotation to stay upright in portrait
 ttr.append("image")
   .attr("xlink:href", TTR_HAS_GLOW ? "/ttr-core-glow.png" : "/ttr-core.png")
   .attr("width", 70)
   .attr("height", 70)
   .attr("x", centerXGrid - 35)
-  .attr("y", centerYGrid - 35);
+  .attr("y", centerYGrid - 35)
+  .attr("transform", MAP_ROT ? `rotate(${-MAP_ROT}, ${centerXGrid}, ${centerYGrid})` : null);
 
 
       ttr.on("click", () => { markPanelOpened(); setClosingInfo(false); setSelectedCoin(ttrInfo); })
@@ -1482,12 +1846,23 @@ ttr.append("image")
   }, [mounted, coinsSig, x, y, showDebug, ttrCap, ttrData, TTR_HAS_GLOW, TTR_CAP_MATS]);
 
   if (!mounted) {
+
     return (
-      <div style={{
-        width: "100vw", height: "100vh", background: "#0c111b",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        color: "#ffd87a", fontFamily: "'Press Start 2P', monospace", fontSize: 12,
-      }}>
+      <div
+        style={{
+          width: legendP.width,
+          height: legendP.height,
+          "--wocTextW": legendP.safeAreaWidth,
+          "--wocTextH": legendP.safeAreaHeight,
+          background: "#0c111b",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "#ffd87a",
+          fontFamily: "'Press Start 2P', monospace",
+          fontSize: `calc(${legendP.fontSize} * ${(textCfg.legendScale || 1) * (textCfg.globalScale || 1)})`,
+        }}
+      >
         Loading Realm...
       </div>
     );
@@ -1505,40 +1880,32 @@ ttr.append("image")
     setTimeout(() => { setLegendOpen(false); setClosingInfo(false); }, 300);
   };
 
-  const panelW = "min(92vw, 762px)";
-  const panelH = "min(90vh, 528px)";
-  const legendW = "min(92vw, 900px)";
-  const legendH = "min(90vh, 680px)";
+  // Panels dimensions are driven by layout presets (portrait/landscape)
+  const panelW = infoP.width;
+  const panelH = infoP.height;
+  const legendW = legendP.width;
+  const legendH = legendP.height;
 
-  return (
-    <div style={{ width: "100vw", height: "100vh", background: "#0c111b", position: "relative", overflow: "hidden" }}>
+return (
+    <div
+      onPointerDownCapture={(e) => {
+        // One-tap close: closes INFO or LEGEND on ANY click/tap (even inside the panel)
+        // Guard against the same tap that just opened a panel.
+        if (Date.now() - (lastPanelOpenAtRef.current || 0) < 250) return;
+        if (selectedCoin) startCloseInfo();
+        if (legendOpen) startCloseLegend();
+      }}
+      style={{ width: "100vw", height: "100vh", background: "#0c111b", position: "relative", overflow: "hidden" }}>
 
       {/* DEBUG (auto): shows when panel state is true */}
-      {(selectedCoin || legendOpen) && (
-        <div className="woc-panel-debug" style={{
-          position: "fixed",
-          top: 10,
-          left: 10,
-          zIndex: 1000000,
-          background: "rgba(0,0,0,0.55)",
-          color: "#ffd87a",
-          fontFamily: "'Press Start 2P', monospace",
-          fontSize: 8,
-          padding: "6px 8px",
-          border: "1px solid rgba(255,255,255,0.25)",
-          borderRadius: 6,
-          pointerEvents: "none",
-        }}>
-          PANEL: {selectedCoin ? "INFO" : "LEGEND"}
-        </div>
-      )}
-
       <video
         src="/map.mp4"
         autoPlay muted loop playsInline
         style={{
           position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh",
-          objectFit: "cover", zIndex: 0, opacity: 0.45, transform: "scale(0.81)", pointerEvents: "none",
+          objectFit: "cover",
+          pointerEvents: "none",
+          ...videoS,
         }}
       />
 
@@ -1591,12 +1958,12 @@ ttr.append("image")
           -webkit-overflow-scrolling: touch;
         }
         .woc-safe *{ max-width: 100%; }
-      `}</style>
+`}</style>
 
       <div style={{
         position: "absolute", top: "50%", left: "50%",
         width: BASE_W, height: BASE_H,
-        transform: `translate(-50%, -50%) scale(${x}, ${y})`,
+        transform: `translate(-50%, -50%) translate(${offsetX}px, ${offsetY}px) rotate(${rotateDeg}deg) scale(${x}, ${y})`,
         transformOrigin: "center center",
         zIndex: 10,
       }}>
@@ -1605,14 +1972,10 @@ ttr.append("image")
           alt="border"
           style={{
             position: "absolute",
-            top: "-22px",
-            left: "50%",
-            transform: "translateX(calc(-50% + 9px))",
-            width: "calc(100% + 150px)",
-            height: "105%",
+            ...borderS,
             objectFit: "cover",
             pointerEvents: "none",
-            zIndex: 15,
+            // zIndex comes from layout preset (borderS)
             animation: "borderGlow 6s ease-in-out infinite",
           }}
         />
@@ -1622,21 +1985,21 @@ ttr.append("image")
           alt="title"
           style={{
             position: "absolute",
-            top: "-3.3%",
-            left: "50%",
-            transform: "translateX(-50%)",
-            width: "15%",
+            ...titleS,
+            transform: `${titleS.transform} scale(${(textCfg.titleScale || 1) * (textCfg.globalScale || 1)})`,
             pointerEvents: "none",
-            zIndex: 20,
+            // zIndex comes from layout preset (titleS)
           }}
         />
 
         <svg ref={svgRef} width={BASE_W} height={BASE_H} style={{ position: "absolute", inset: 0, zIndex: 10, touchAction: "manipulation" }} />
 
         <div style={{
-          position: "absolute", bottom: 20, left: 30, zIndex: 60,
+          position: "absolute",
+          ...statusS,
+          transform: `scale(${(layout.statusBar?.fontScale || 1) * (textCfg.statusScale || 1) * (textCfg.globalScale || 1)})`,
+          transformOrigin: "left bottom",
           fontFamily: "'Press Start 2P', monospace",
-          fontSize: 11,
           color: cgOk ? "#33ff66" : "#ff4444",
           textShadow: cgOk ? "0 0 6px rgba(50,255,120,0.35)" : "0 0 6px rgba(255,70,70,0.35)",
           lineHeight: "18px",
@@ -1652,7 +2015,7 @@ ttr.append("image")
             TTR: {TTR_IS_FORGING ? <span style={{ color: "#ffaa55" }}>FORGING</span> : `${(TTR_CAP_RAW / 1e6).toFixed(2)}M`}
             {!TTR_IS_FORGING && ttrLoading ? " • Raydium…" : ""}
           </div>
-          {!TTR_IS_FORGING && ttrData?.price != null && <div style={{ opacity: 0.9 }}>Price: ${Number(ttrData.price).toFixed(8)}</div>}
+          {!TTR_IS_FORGING && ttrData?.price != null && <div style={{ opacity: 0.9 }}>Price: ${fmtPrice(ttrData.price, 8)}</div>}
           {!TTR_IS_FORGING && ttrError && <div style={{ color: "#ff8888" }}>TTR: {ttrError}</div>}
 
           <button
@@ -1696,11 +2059,8 @@ ttr.append("image")
   onTouchEnd={() => setInfoHover(false)}
   style={{
     position: "absolute",
-    bottom: "30px",
-    right: "180px",
-    zIndex: 65,
-    width: "70px",
-    height: "70px",
+    ...infoBtnS,
+    transform: `scale(${(layout.buttons?.info?.scale || 1) * (textCfg.globalScale || 1)})`,
     cursor: "pointer",
     touchAction: "manipulation",
   }}
@@ -1726,11 +2086,8 @@ ttr.append("image")
   onTouchEnd={() => setXHover(false)}
   style={{
     position: "absolute",
-    bottom: "30px",
-    right: "115px",
-    zIndex: 65,
-    width: "70px",
-    height: "70px",
+    ...closeBtnS,
+    transform: `scale(${(layout.buttons?.close?.scale || 1) * (textCfg.globalScale || 1)})`,
     cursor: "pointer",
     touchAction: "manipulation",
   }}
@@ -1744,49 +2101,32 @@ ttr.append("image")
     draggable={false}
   />
 </a>
-</div>
 
-{/* GLOBAL CLICK-CLOSE OVERLAY (closes on ANY click/tap) */}
-{(selectedCoin || legendOpen) && (
-  <div
-    onPointerDown={(e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (selectedCoin) startCloseInfo();
-      if (legendOpen) startCloseLegend();
-    }}
-    style={{
-      position: "fixed",
-      inset: 0,
-      zIndex: 1000000,
-      background: "transparent",
-      touchAction: "manipulation",
-    }}
-  />
-)}
-
-{/* INFO PANEL */}
-{selectedCoin && (
+{/* INFO PANEL - Now inside wrapper */}
+{selectedCoin && (() => {
+  // ✅ No uiScale needed - wrapper already applies scale(x,y)
+  const panelScale = (textCfg.panelScale || 1) * (textCfg.globalScale || 1);
+  
+  return (
   <div
     data-info-panel
     onPointerDown={(e) => e.stopPropagation()}
     style={{
-      position: "fixed",
+      position: "absolute",
       left: "50%",
-      top: "50%",
-      transform: "translate(-50%, -50%)",
+      top: infoP.top,
+      transform: `translate(-50%, -50%) scale(${panelScale})`,
+      transformOrigin: "center center",
       width: panelW,
       height: panelH,
       zIndex: 1000001,
-      fontFamily: "'Press Start 2P', monospace",
-      color: "#ffd87a",
+      fontFamily: '"Press Start 2P", monospace',
+      color: "#dfd87a",
       textShadow: "0 0 6px rgba(255,215,100,0.6)",
-      display: "flex",
-      justifyContent: "center",
-      alignItems: "center",
-      textAlign: "center",
       pointerEvents: "auto",
       animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`,
+      overflow: "hidden",
+      boxSizing: "border-box",
     }}
   >
     <div
@@ -1796,6 +2136,9 @@ ttr.append("image")
         width: "100%",
         height: "100%",
         position: "relative",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
       }}
     >
       <img
@@ -1811,118 +2154,131 @@ ttr.append("image")
         }}
       />
 
-      <div
-        className="woc-text woc-safe"
-        style={{
-          position: "absolute",
-          top: "70%",
-          left: "50%",
-          width: "80%",
-          height: "80%",
-          transform: "translate(-50%, -50%)",
-          overflowY: "auto",
-          overflowX: "hidden",
-          padding: "18px 22px",
-          boxSizing: "border-box",
-          zIndex: 2,
-          textAlign: "center",
-        }}
-      >
-        <div style={{ marginBottom: 18 }}>
-          <div className="woc-title" style={{ marginBottom: 10 }}>
-            INFO
-          </div>
-          <div>Name: {selectedCoin.name}</div>
-          <div>
-            Mkt Cap:{" "}
-            {selectedCoin.capNum > 0
-              ? `${(selectedCoin.capNum / 1e6).toFixed(2)}M`
-              : "N/A"}
-          </div>
-          <div>
-            Price:{" "}
-            {!selectedCoin.price || selectedCoin.price === "$0"
-              ? "N/A"
-              : selectedCoin.price}
-          </div>
-        </div>
-
-        <div style={{ marginTop: 8, marginBottom: 10, fontWeight: 800 }}>
-          Price variation:
-        </div>
-
+      {/* ✅ Text safe-zone + scroll container */}
+      <div className="info-text-zone">
         <div
+          className="woc-text woc-safe"
           style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 14,
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            width: infoP.safeAreaWidth,
+            maxHeight: infoP.safeAreaHeight,
+            transform: "translate(-50%, -50%)",
+            overflowY: "auto",
+            overflowX: "hidden",
+            padding: `${infoP.paddingTop} ${infoP.paddingX} ${infoP.paddingBottom}`,
+            boxSizing: "border-box",
+            zIndex: 2,
+            textAlign: infoP.textAlign,
+            fontSize: infoP.fontSize,
+            lineHeight: textCfg.lineHeight || 1.25,
           }}
         >
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              textAlign: "center",
-            }}
-          >
-            <div style={{ fontWeight: 800, marginBottom: 6 }}>1H:</div>
-            <div>
-              %:{" "}
-              {panelStats?.h1?.changePct != null
-                ? `${Number(panelStats.h1.changePct).toFixed(2)}%`
-                : "N/A"}
+          <div style={{ marginBottom: 18 }}>
+            <div className="woc-title" style={{ marginBottom: 10 }}>
+              INFO
             </div>
-            <div>High: ${fmtPrice(panelStats?.h1?.high)}</div>
-            <div>Low: ${fmtPrice(panelStats?.h1?.low)}</div>
+
+            <div>Name: {selectedCoin.name}</div>
+
+            <div>
+              Mkt Cap:{" "}
+              {selectedCoin.capNum > 0 ? `${(selectedCoin.capNum / 1e6).toFixed(2)}M` : "N/A"}
+            </div>
+
+            <div>
+              Price:{" "}
+              {(() => { const p = normalizePrice(selectedCoin?.price); return p != null && p !== 0 ? `$${fmtPrice(p, 8)}` : "N/A"; })()}
+            </div>
+          </div>
+
+          <div style={{ marginTop: 8, marginBottom: 10, fontWeight: 800 }}>
+            Price variation:
           </div>
 
           <div
             style={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              textAlign: "center",
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 14,
             }}
           >
-            <div style={{ fontWeight: 800, marginBottom: 6 }}>24H:</div>
-            <div>
-              %:{" "}
-              {panelStats?.h24?.changePct != null
-                ? `${Number(panelStats.h24.changePct).toFixed(2)}%`
-                : "N/A"}
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                textAlign: "center",
+              }}
+            >
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>1H:</div>
+              <div>
+                %:{" "}
+                {panelStats?.h1?.changePct != null
+                  ? `${Number(panelStats.h1.changePct).toFixed(2)}%`
+                  : "N/A"}
+              </div>
+              <div>High: ${fmtPrice(panelStats?.h1?.high, 8)}</div>
+              <div>Low: ${fmtPrice(panelStats?.h1?.low, 8)}</div>
             </div>
-            <div>High: ${fmtPrice(panelStats?.h24?.high)}</div>
-            <div>Low: ${fmtPrice(panelStats?.h24?.low)}</div>
+
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                textAlign: "center",
+              }}
+            >
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>24H:</div>
+              <div>
+                %:{" "}
+                {panelStats?.h24?.changePct != null
+                  ? `${Number(panelStats.h24.changePct).toFixed(2)}%`
+                  : "N/A"}
+              </div>
+              <div>High: ${fmtPrice(panelStats?.h24?.high, 8)}</div>
+              <div>Low: ${fmtPrice(panelStats?.h24?.low, 8)}</div>
+            </div>
           </div>
         </div>
       </div>
+
     </div>
   </div>
-)}
+  );
+})()}
 
-{/* LEGEND PANEL */}
-{legendOpen && (
+
+{/* LEGEND PANEL - Now inside wrapper */}
+{legendOpen && (() => {
+  // ✅ No uiScale needed - wrapper already applies scale(x,y)
+  const panelScale = (textCfg.legendScale || 1) * (textCfg.globalScale || 1);
+  
+  return (
   <div
-    data-info-panel
+    data-legend-panel
     onPointerDown={(e) => e.stopPropagation()}
     style={{
-      position: "fixed",
+      position: "absolute",
       left: "50%",
-      top: "56%",
-      transform: "translate(-50%, -50%)",
+      top: legendP.top,
+      transform: `translate(-50%, -50%) scale(${panelScale})`,
+      transformOrigin: "center center",
       width: legendW,
       height: legendH,
+      "--wocTextW": legendP.safeAreaWidth,
+      "--wocTextH": legendP.safeAreaHeight,
       zIndex: 1000001,
       fontFamily: "'Press Start 2P', monospace",
       color: "#ffd87a",
       textShadow: "0 0 6px rgba(255,215,100,0.6)",
-      display: "flex",
-      justifyContent: "center",
-      alignItems: "center",
       textAlign: "center",
       pointerEvents: "auto",
       animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`,
+      overflow: "hidden",
+      boxSizing: "border-box",
     }}
   >
     <div
@@ -1932,6 +2288,7 @@ ttr.append("image")
         width: "100%",
         height: "100%",
         position: "relative",
+        boxSizing: "border-box",
       }}
     >
       <img
@@ -1947,56 +2304,65 @@ ttr.append("image")
         }}
       />
 
-      <div
-        className="woc-text woc-safe"
-        style={{
-          position: "absolute",
-          top: "70%",
-          left: "50%",
-          width: "80%",
-          height: "80%",
-          transform: "translate(-50%, -50%)",
-          overflowY: "auto",
-          overflowX: "hidden",
-          padding: "18px 22px",
-          boxSizing: "border-box",
-          zIndex: 2,
-          textAlign: "center",
-        }}
-      >
-        <div style={{ marginBottom: 14 }}>
-          <div className="woc-title">SCALES &amp; LEGEND</div>
-        </div>
+      {/* Text is confined to this zone (scroll inside) */}
+      <div className="legend-text-zone"
+      style={{
+        width: legendP.safeAreaWidth,
+        maxHeight: legendP.safeAreaHeight,
+        margin: "0 auto",
 
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ marginBottom: 6, textDecoration: "underline" }}>
-            CRYPTO CLUSTERS
-          </div>
-          <div>Organic sizing (continuous)</div>
-          <div>Size reflects relative market cap</div>
-          <div>Scales are relative to the active market window</div>
-        </div>
+        paddingTop: legendP.paddingTop,
+        paddingLeft: legendP.paddingX,
+        paddingRight: legendP.paddingX,
+        paddingBottom: legendP.paddingBottom,
 
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ marginBottom: 6, textDecoration: "underline" }}>
-            TTR MATERIALS
-          </div>
-          <div>Core starts at 100k market cap</div>
-          <div>Rings evolve with growth milestones</div>
-          <div>Copper → Silver → Gold → Final</div>
-        </div>
+        overflowY: "auto",
+        overflowX: "hidden",
+        WebkitOverflowScrolling: "touch",
+        boxSizing: "border-box",
 
-        <div>
-          <div style={{ marginBottom: 6, textDecoration: "underline" }}>
-            DATA
+        overflowWrap: "anywhere",
+        wordBreak: "break-word",
+        hyphens: "auto",
+
+        fontSize: legendP.fontSize,
+        lineHeight: textCfg.lineHeight || 1.22,
+        textAlign: legendP.textAlign,
+
+        pointerEvents: "auto",
+        zIndex: 2,
+      }}>
+        <div className="woc-text woc-safe" style={{ position: "relative", width: "100%", height: "100%" }}>
+          <div style={{ marginBottom: 14 }}>
+            <div className="woc-title">SCALES &amp; LEGEND</div>
           </div>
-          <div>Live market data</div>
-          <div>Real-time visual scaling</div>
+
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ marginBottom: 6, textDecoration: "underline" }}>CRYPTO CLUSTERS</div>
+            <div>Organic sizing (continuous)</div>
+            <div>Size reflects relative market cap</div>
+            <div>Scales are relative to the active market window</div>
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ marginBottom: 6, textDecoration: "underline" }}>TTR MATERIALS</div>
+            <div>Core starts at 100k market cap</div>
+            <div>Rings evolve with growth milestones</div>
+            <div>Copper → Silver → Gold → Final</div>
+          </div>
+
+          <div>
+</div>
         </div>
       </div>
     </div>
   </div>
-)}
+  );
+})()}
+
+</div>
+
+{/* GLOBAL CLICK-CLOSE OVERLAY (closes on ANY click/tap) */}
 
 </div>
 );
