@@ -57,6 +57,9 @@ function useLayoutDriver() {
       // NEW: All independent elements from layout
       border: L.border || {},
       title: L.title || {},
+      outline18: L.outline18 || {},
+      outline30: L.outline30 || {},
+      outline42: L.outline42 || {},
       buttons: L.buttons || {},
       panels: L.panels || {},
       text: L.text || {},
@@ -109,6 +112,9 @@ function useLayoutDriver() {
         // NEW: All independent elements from layout
         border: L.border || {},
         title: L.title || {},
+        outline18: L.outline18 || {},
+        outline30: L.outline30 || {},
+        outline42: L.outline42 || {},
         buttons: L.buttons || {},
         panels: L.panels || {},
         text: L.text || {},
@@ -230,6 +236,47 @@ function getTextConfig(layout) {
     legendScale: t.legendScale || 1,
     statusScale: t.statusScale || 1,
     lineHeight: t.lineHeight || 1.25,
+  };
+}
+
+function getOutline18Styles(layout) {
+  const o = layout.outline18 || {};
+  return {
+    top: o.topPct != null ? `${o.topPct}%` : '50%',
+    left: o.leftPct != null ? `${o.leftPct}%` : '50%',
+    width: o.sizePx != null ? `${o.sizePx}px` : '520px',
+    height: o.sizePx != null ? `${o.sizePx}px` : '520px',
+    transform: `translate(-50%, -50%) translate(${o.nudgeXpx || 0}px, ${o.nudgeYpx || 0}px) scale(${o.scale || 1}) rotate(${o.rotateDeg || 0}deg)`,
+    opacity: o.opacity != null ? o.opacity : 1,
+    zIndex: o.zIndex || 55,
+  };
+}
+
+function getOutline30Styles(layout) {
+  const o = layout.outline30 || {};
+  return {
+    position: "absolute",
+    top: o.topPct != null ? `${o.topPct}%` : '50%',
+    left: o.leftPct != null ? `${o.leftPct}%` : '50%',
+    width: o.sizePx != null ? `${o.sizePx}px` : '520px',
+    height: o.sizePx != null ? `${o.sizePx}px` : '520px',
+    transform: `translate(-50%, -50%) translate(${o.nudgeXpx || 0}px, ${o.nudgeYpx || 0}px) rotate(${o.rotateDeg || 0}deg) scale(${o.scale || 1})`,
+    opacity: o.opacity != null ? o.opacity : 1,
+    zIndex: o.zIndex || 54,
+  };
+}
+
+function getOutline42Styles(layout) {
+  const o = layout.outline42 || {};
+  return {
+    position: "absolute",
+    top: o.topPct != null ? `${o.topPct}%` : '50%',
+    left: o.leftPct != null ? `${o.leftPct}%` : '50%',
+    width: o.sizePx != null ? `${o.sizePx}px` : '520px',
+    height: o.sizePx != null ? `${o.sizePx}px` : '520px',
+    transform: `translate(-50%, -50%) translate(${o.nudgeXpx || 0}px, ${o.nudgeYpx || 0}px) rotate(${o.rotateDeg || 0}deg) scale(${o.scale || 1})`,
+    opacity: o.opacity != null ? o.opacity : 1,
+    zIndex: o.zIndex || 53,
   };
 }
 
@@ -696,23 +743,17 @@ async function fetchWindowCoins(force = false) {
 // Attach robust tap/click handler (works across iOS Safari / Android / Desktop)
 function attachTapHandler(selection, handler) {
   if (!selection) return;
-  // desktop click
-  selection.on("click", (event, d) => {
-    // d3 v7 passes event explicitly; keep compatibility
-    if (event) event.stopPropagation?.();
-    handler(d);
-  });
-  // mobile touch
-  selection.on("touchstart", (event, d) => {
-    // prevent ghost click + allow immediate response
-    event.stopPropagation?.();
-    handler(d);
-  });
-  // pointer (covers many devices)
+
+  // Use ONE event only to avoid double-trigger (pointerdown -> click)
   selection.on("pointerdown", (event, d) => {
-    event.stopPropagation?.();
+    event?.preventDefault?.();      // avoids ghost click on mobile
+    event?.stopPropagation?.();
     handler(d);
   });
+
+  // Safety: remove other handlers if previously set
+  selection.on("click", null);
+  selection.on("touchstart", null);
 }
 
 // ============================================================================
@@ -729,14 +770,19 @@ export default function Home() {
   // Panel + text config from layoutPresets
   const infoP = getPanelStyles(layout, "info");
   const legendP = getPanelStyles(layout, "legend");
+  const manifestP = getPanelStyles(layout, "manifest");
   const textCfg = getTextConfig(layout);
 
   // All other UI elements driven by layoutPresets
   const borderS = getBorderStyles(layout);
   const titleS = getTitleStyles(layout);
+  const outline18S = getOutline18Styles(layout);
+  const outline30S = getOutline30Styles(layout);
+  const outline42S = getOutline42Styles(layout);
   const infoBtnS = getButtonStyles(layout, "info");
   const closeBtnS = getButtonStyles(layout, "close");
   const pumpBtnS = getButtonStyles(layout, "pump");
+  const manifestBtnS = getButtonStyles(layout, "manifest");
   const statusS = getStatusBarStyles(layout);
   const videoS = getVideoStyles(layout);
 
@@ -764,6 +810,9 @@ export default function Home() {
     new URLSearchParams(window.location.search).get("admin") === "kingnarwhal";
 
   const svgRef = useRef(null);
+  const d3WorldRef = useRef(null);          // d3 selection for worldG
+  const d3ClustersRef = useRef(new Map());  // id -> d3 selection for cluster group
+  const selectedIdRef = useRef(null);       // selected cluster id for hover logic
   const renderIdRef = useRef(0);
   const [showDebug, setShowDebug] = useState(process.env.NEXT_PUBLIC_INTERNAL_DEBUG === "1");
 
@@ -773,6 +822,7 @@ export default function Home() {
   const [selectedCoin, setSelectedCoin] = useState(null);
   const [closingInfo, setClosingInfo] = useState(false);
   const [legendOpen, setLegendOpen] = useState(false);
+  const [manifestOpen, setManifestOpen] = useState(false);
 
   const [cgOk, setCgOk] = useState(false);
   const [lastUpdateUTC, setLastUpdateUTC] = useState("…");
@@ -783,6 +833,7 @@ export default function Home() {
   const [infoHover, setInfoHover] = useState(false);
   const [xHover, setXHover] = useState(false);
   const [pumpHover, setPumpHover] = useState(false);
+  const [manifestHover, setManifestHover] = useState(false);
 
   // Birdeye stats for INFO panel (1H / 24H + High/Low)
   const [panelStats, setPanelStats] = useState(null);
@@ -1371,8 +1422,8 @@ const gridOutline = defsGrid.append("filter")
 gridOutline.append("feDropShadow")
   .attr("dx", 0)
   .attr("dy", 0)
-  .attr("stdDeviation", 2.2)
-  .attr("flood-color", "rgba(0,0,0,0.75)");
+  .attr("stdDeviation", 1.2)
+  .attr("flood-color", "rgba(0,0,0,0.6)");
 
 // Inner black crisp
 gridOutline.append("feDropShadow")
@@ -1380,6 +1431,26 @@ gridOutline.append("feDropShadow")
   .attr("dy", 0)
   .attr("stdDeviation", 2.2)
   .attr("flood-color", "rgba(0,0,0,0.55)");
+
+// Grid glow (for animated layer)
+const gridGlow = defsGrid.append("filter")
+  .attr("id", "grid-glow-blue")
+  .attr("x", "-60%")
+  .attr("y", "-60%")
+  .attr("width", "220%")
+  .attr("height", "220%");
+
+gridGlow.append("feDropShadow")
+  .attr("dx", 0)
+  .attr("dy", 0)
+  .attr("stdDeviation", 3.2)
+  .attr("flood-color", "rgba(120,220,255,0.35)");
+
+gridGlow.append("feDropShadow")
+  .attr("dx", 0)
+  .attr("dy", 0)
+  .attr("stdDeviation", 8.0)
+  .attr("flood-color", "rgba(80,170,255,0.18)");
 
     // ✅ Create worldG group for map rotation (portrait mode only)
     const worldG = svg.append("g").attr("class", "world-map");
@@ -1425,8 +1496,9 @@ gridOutline.append("feDropShadow")
       }
     }
 
+   // Grid base layer (stable, blue)
    worldG.append("g")
-  .attr("class", "hex-grid")
+  .attr("class", "hex-grid-base")
   .selectAll("path")
   .data(hexList)
   .enter()
@@ -1434,9 +1506,71 @@ gridOutline.append("feDropShadow")
   .attr("d", hexbin.hexagon())
   .attr("transform", (d) => `translate(${d.x},${d.y})`)
   .attr("fill", "rgba(255,255,255,0.015)")
-  .attr("stroke", "rgba(120,220,255,0.85)")
+  .attr("stroke", "rgba(120,220,255,0.75)")
   .attr("stroke-width", 0.9)
-  .attr("filter", "url(#grid-outline-neo)");
+  .attr("filter", "url(#grid-outline-neo)")
+  .style("pointer-events", "none");
+
+// Grid glow layer (animated globally, not per-hex)
+const gridGlowG = worldG.append("g")
+  .attr("class", "hex-grid-glow")
+  .style("opacity", 0)
+  .style("pointer-events", "none");
+
+gridGlowG.selectAll("path")
+  .data(hexList)
+  .enter()
+  .append("path")
+  .attr("d", hexbin.hexagon())
+  .attr("transform", (d) => `translate(${d.x},${d.y})`)
+  .attr("fill", "none")
+  .attr("stroke", "rgba(120,220,255,0.95)")
+  .attr("stroke-width", 1.35)
+  .attr("filter", "url(#grid-glow-blue)");
+
+// Animate grid glow globally (RAF, linear, random)
+let gridGlowAnimStop = false;
+
+let glow = 0;
+let start = performance.now();
+let from = 0;
+let to = 0.18;
+let dur = 1800;
+let nextDelay = 600;
+
+function pickNext() {
+  from = glow;
+  to = 0.05 + Math.random() * 0.25;       // 0.05 → 0.30
+  dur = 900 + Math.random() * 2800;       // 0.9s → 3.7s
+  nextDelay = 250 + Math.random() * 1200; // 0.25s → 1.45s
+  start = performance.now();
+}
+
+pickNext();
+
+function tick(now) {
+  if (gridGlowAnimStop) return;
+
+  const t = (now - start) / dur;
+
+  if (t >= 1) {
+    glow = to;
+    gridGlowG.style("opacity", glow);
+
+    // Random pause, then new segment
+    setTimeout(() => {
+      if (!gridGlowAnimStop) pickNext();
+    }, nextDelay);
+  } else {
+    // Pure linear interpolation
+    glow = from + (to - from) * t;
+    gridGlowG.style("opacity", glow);
+  }
+
+  requestAnimationFrame(tick);
+}
+
+requestAnimationFrame(tick);
 
     const ttrHex = hexList.reduce((prev, curr) =>
       Math.hypot(curr.x - width / 2, curr.y - height / 2) <
@@ -1510,7 +1644,7 @@ gridOutline.append("feDropShadow")
     worldG.append("rect")
       .attr("width", width)
       .attr("height", height)
-      .attr("fill", "rgba(8,10,18,0.6)")
+      .attr("fill", "rgba(12,8,4,0.65)")
       .attr("filter", "url(#blur8)")
       .attr("mask", "url(#mask-outside)");
 
@@ -1667,10 +1801,10 @@ gridOutline.append("feDropShadow")
             .attr("d", hexbin.hexagon())
             .attr("transform", `translate(${h.x},${h.y})`)
             .attr("fill", "rgba(255,255,255,0.03)")
-            .attr("stroke", "rgba(59,188,255,0.20)")
+            .attr("stroke", "rgba(255,190,90,0.18)")
             .attr("stroke-width", 0.6)
             .style("opacity", alpha)
-            .style("filter", "drop-shadow(0 0 2px rgba(59,188,255,0.35))");
+            .style("filter", "drop-shadow(0 0 2px rgba(255,170,80,0.22))");
 
           const breathClass = isUnlocked ? `ttr-mat-breath ttr-mat-${matKey}` : "";
           const breathDelay = isUnlocked ? (TTR_BREATH_DELAY_MS[matKey] || 0) : 0;
@@ -1684,8 +1818,70 @@ gridOutline.append("feDropShadow")
 
       const defs = svg.append("defs");
 
+      // ===== GOLD GLOWS (forge warm) =====
+      const glowSoft = defs.append("filter")
+        .attr("id", "gold-glow-soft")
+        .attr("x", "-60%").attr("y", "-60%")
+        .attr("width", "220%").attr("height", "220%");
+
+      glowSoft.append("feDropShadow")
+        .attr("dx", 0).attr("dy", 0)
+        .attr("stdDeviation", 3.5)
+        .attr("flood-color", "rgba(255,170,80,0.35)");
+
+      glowSoft.append("feDropShadow")
+        .attr("dx", 0).attr("dy", 0)
+        .attr("stdDeviation", 7.5)
+        .attr("flood-color", "rgba(255,130,40,0.18)");
+
+      const glowStrong = defs.append("filter")
+        .attr("id", "gold-glow-strong")
+        .attr("x", "-70%").attr("y", "-70%")
+        .attr("width", "240%").attr("height", "240%");
+
+      glowStrong.append("feDropShadow")
+        .attr("dx", 0).attr("dy", 0)
+        .attr("stdDeviation", 4.5)
+        .attr("flood-color", "rgba(255,190,95,0.55)");
+
+      glowStrong.append("feDropShadow")
+        .attr("dx", 0).attr("dy", 0)
+        .attr("stdDeviation", 12)
+        .attr("flood-color", "rgba(255,120,35,0.28)");
+
+      // ===== BEVEL (visible forged edge) =====
+      const bevelHi = defs.append("filter")
+        .attr("id", "bevel-hi")
+        .attr("x", "-70%").attr("y", "-70%")
+        .attr("width", "240%").attr("height", "240%");
+
+      bevelHi.append("feDropShadow")
+        .attr("dx", -1.6).attr("dy", -1.6)
+        .attr("stdDeviation", 0.9)
+        .attr("flood-color", "rgba(255,255,255,0.38)");
+
+      bevelHi.append("feDropShadow")
+        .attr("dx", -0.7).attr("dy", -0.7)
+        .attr("stdDeviation", 0.55)
+        .attr("flood-color", "rgba(255,230,180,0.22)");
+
+      const bevelLo = defs.append("filter")
+        .attr("id", "bevel-lo")
+        .attr("x", "-70%").attr("y", "-70%")
+        .attr("width", "240%").attr("height", "240%");
+
+      bevelLo.append("feDropShadow")
+        .attr("dx", 1.8).attr("dy", 1.8)
+        .attr("stdDeviation", 1.05)
+        .attr("flood-color", "rgba(0,0,0,0.62)");
+
+      bevelLo.append("feDropShadow")
+        .attr("dx", 0.9).attr("dy", 0.9)
+        .attr("stdDeviation", 0.65)
+        .attr("flood-color", "rgba(0,0,0,0.40)");
+
       clusters.forEach((c) => {
-        // Gradient for cluster fill
+        // Gradient for cluster fill - forged metal (darker, less saturated)
         const grad = defs
           .append("radialGradient")
           .attr("id", `grad-${c.id}`)
@@ -1693,20 +1889,27 @@ gridOutline.append("feDropShadow")
           .attr("cy", "50%")
           .attr("r", "60%");
 
+        const base = d3.color(c.color);
+        const core = base ? base.darker(0.7) : d3.color("#666");
+        const edge = base ? base.darker(2.8) : d3.color("#222");
+
         grad.append("stop")
           .attr("offset", "0%")
-          .attr("stop-color", c.color)
-          .attr("stop-opacity", 1);
+          .attr("stop-color", core.formatHex())
+          .attr("stop-opacity", 0.92);
 
         grad.append("stop")
           .attr("offset", "100%")
-          .attr("stop-color", d3.color(c.color).darker(2))
-          .attr("stop-opacity", 0.85);
+          .attr("stop-color", edge.formatHex())
+          .attr("stop-opacity", 0.88);
 
         const g = worldG
           .append("g")
           .attr("class", `cluster-${c.id} cluster-breath`)
-          .style("opacity", 1);
+          .style("opacity", 1)
+          .attr("data-cluster-id", c.id)
+          .style("transition", "opacity 180ms ease, filter 180ms ease")
+          .attr("data-order", 1); // base order, can be raised when selected
 
         const hexPath = hexbin.hexagon();
 
@@ -1733,13 +1936,49 @@ gridOutline.append("feDropShadow")
             .attr("stroke", "rgba(0,0,0,0.65)")
             .attr("stroke-width", 2.6).style("opacity", ringOpacity);
 
-          // 2) Mid blue stroke
+          // 2) Mid neutral stroke (idle state)
           g.append("path")
             .attr("d", hexPath)
             .attr("transform", tr)
             .attr("fill", "none")
-            .attr("stroke", "rgba(80,170,255,0.55)")
+            .attr("stroke", "rgba(120,120,120,0.45)")
             .attr("stroke-width", 1.6).style("opacity", ringOpacity);
+
+          // Bevel highlight (top-left) - forged light edge (NO FILTER for perf)
+          g.append("path")
+            .attr("d", hexPath)
+            .attr("transform", tr)
+            .attr("fill", "none")
+            .attr("stroke", "rgba(255,255,255,0.32)")
+            .attr("stroke-width", 1.9)
+            .style("opacity", ringOpacity);
+
+          // Bevel shadow (bottom-right) - forged depth (NO FILTER for perf)
+          g.append("path")
+            .attr("d", hexPath)
+            .attr("transform", tr)
+            .attr("fill", "none")
+            .attr("stroke", "rgba(0,0,0,0.55)")
+            .attr("stroke-width", 2.1)
+            .style("opacity", ringOpacity);
+
+          // Micro warm rim (adds forged metal feel, subtle but readable)
+          g.append("path")
+            .attr("d", hexPath)
+            .attr("transform", tr)
+            .attr("fill", "none")
+            .attr("stroke", "rgba(255,180,90,0.16)")
+            .attr("stroke-width", 0.9)
+            .style("opacity", ringOpacity * 0.9);
+
+          // Inner edge (gives forged cavity, subtle)
+          g.append("path")
+            .attr("d", hexPath)
+            .attr("transform", tr)
+            .attr("fill", "none")
+            .attr("stroke", "rgba(0,0,0,0.42)")
+            .attr("stroke-width", 0.75)
+            .style("opacity", ringOpacity);
 
           // 3) Main filled hex with a thin inner dark stroke
           g.append("path")
@@ -1750,6 +1989,55 @@ gridOutline.append("feDropShadow")
             .attr("stroke-width", 0.8).style("opacity", ringOpacity);
         });
 
+        // 4️⃣ Cluster warm outline overlay (shown on hover/selected)
+        const outline = g.append("g").attr("class", "cluster-outline").style("opacity", 0);
+
+        c.hexes.forEach((h) => {
+          const tr = `translate(${h.x},${h.y})`;
+          outline.append("path")
+            .attr("d", hexPath)
+            .attr("transform", tr)
+            .attr("fill", "none")
+            .attr("stroke", "rgba(255,190,90,0.85)")
+            .attr("stroke-width", 2.0);
+            // NO filter at build - added dynamically on hover/selected for perf
+        });
+
+        // 4B) Selected warm halo (subtle heat around cluster center)
+        const halo = g.append("g")
+          .attr("class", "cluster-halo")
+          .style("opacity", 0)
+          .style("pointer-events", "none");
+
+        halo.append("circle")
+          .attr("cx", c.centerX)
+          .attr("cy", c.centerY)
+          .attr("r", 58)
+          .attr("fill", "rgba(255,165,70,0.10)")
+          .style("filter", "url(#gold-glow-soft)");
+
+        halo.append("circle")
+          .attr("cx", c.centerX)
+          .attr("cy", c.centerY)
+          .attr("r", 46)
+          .attr("fill", "rgba(255,140,40,0.08)")
+          .style("filter", "url(#gold-glow-soft)");
+
+        // Hitbox (captures hover/click reliably)
+        const hit = g.append("circle")
+          .attr("cx", c.centerX)
+          .attr("cy", c.centerY)
+          .attr("r", 62)
+          .attr("fill", "rgba(0,0,0,0)")
+          .style("pointer-events", "all")
+          .style("cursor", "pointer")
+          .style("touch-action", "manipulation"); // Prevent ghost clicks on iOS
+
+        // Mobile tap security
+        hit.on("touchstart", (event) => {
+          if (event.preventDefault) event.preventDefault();
+        });
+
         // Logo
         g.append("image")
           .attr("xlink:href", c.logo)
@@ -1758,14 +2046,33 @@ gridOutline.append("feDropShadow")
           .attr("x", Math.round(c.centerX - 24))
           .attr("y", Math.round(c.centerY - 24))
           .attr("transform", MAP_ROT ? `rotate(${-MAP_ROT}, ${c.centerX}, ${c.centerY})` : null)
-          .style("cursor", "pointer")
-          .style("pointer-events", "all");
+          .style("pointer-events", "none");
 
-        // Tap handler (last image in this group)
-        attachTapHandler(
-          g.selectAll("image").filter((dd, ii, nn) => nn[ii] === g.selectAll("image").nodes().slice(-1)[0]),
-          () => { markPanelOpened(); setClosingInfo(false); setSelectedCoin(c); }
-        );
+        // Hover (desktop only) - disabled on mobile/touch devices
+        hit.on("pointerenter", () => {
+          if (window.matchMedia && window.matchMedia("(hover: none)").matches) return; // mobile: no hover
+          g.classed("is-hover", true);
+          outline.style("opacity", 0.9).style("filter", "url(#gold-glow-soft)");
+          halo.style("opacity", 0.55);
+        });
+
+        hit.on("pointerleave", () => {
+          if (window.matchMedia && window.matchMedia("(hover: none)").matches) return; // mobile: no hover
+          g.classed("is-hover", false);
+          outline.style("opacity", 0).style("filter", null);
+          halo.style("opacity", 0);
+        });
+
+        // Tap/click to open INFO panel
+        attachTapHandler(hit, () => {
+          markPanelOpened();
+          setClosingInfo(false);
+
+          setSelectedCoin(c);
+        });
+
+        // 5️⃣ Store D3 selections for reactive updates (including halo)
+        d3ClustersRef.current.set(c.id, { g, outline, halo });
       });
 
 // TTR halo gradient
@@ -1777,22 +2084,22 @@ gridOutline.append("feDropShadow")
         .attr("r", "70%");
      gradTTR.append("stop")
   .attr("offset", "0%")
-  .attr("stop-color", "#e8f7ff")
+  .attr("stop-color", "#ffe2a8")
   .attr("stop-opacity", 0.9);
 
 gradTTR.append("stop")
-  .attr("offset", "35%")
-  .attr("stop-color", "#7fd9ff")
+  .attr("offset", "40%")
+  .attr("stop-color", "#ffb347")
   .attr("stop-opacity", 0.55);
 
 gradTTR.append("stop")
-  .attr("offset", "65%")
-  .attr("stop-color", "#3bbcff")
+  .attr("offset", "70%")
+  .attr("stop-color", "#ff8c1a")
   .attr("stop-opacity", 0.25);
 
 gradTTR.append("stop")
   .attr("offset", "100%")
-  .attr("stop-color", "#1b4fff")
+  .attr("stop-color", "#5a2a00")
   .attr("stop-opacity", 0.05);
 
       const ttrInfo = {
@@ -1841,11 +2148,74 @@ ttr.append("image")
   .attr("transform", MAP_ROT ? `rotate(${-MAP_ROT}, ${centerXGrid}, ${centerYGrid})` : null);
 
 
-      ttr.on("click", () => { markPanelOpened(); setClosingInfo(false); setSelectedCoin(ttrInfo); })
-      .on("touchstart", () => { markPanelOpened(); setClosingInfo(false); setSelectedCoin(ttrInfo); })
-      .on("pointerdown", () => { markPanelOpened(); setClosingInfo(false); setSelectedCoin(ttrInfo); });
+      ttr.on("pointerdown", (event) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        
+        markPanelOpened();
+        setClosingInfo(false);
+        setSelectedCoin(ttrInfo);
+      });
+
+      // Remove double triggers
+      ttr.on("click", null);
+      ttr.on("touchstart", null);
 })();
+
+    // Store worldG reference for reactive updates
+    d3WorldRef.current = worldG;
+
+    // Cleanup: stop grid glow animation
+    return () => {
+      gridGlowAnimStop = true;
+    };
+
   }, [mounted, coinsSig, x, y, showDebug, ttrCap, ttrData, TTR_HAS_GLOW, TTR_CAP_MATS]);
+
+  // 6️⃣ REACTIVE HOVER & DIMMING - useEffect qui met à jour selected + dimming sans rerender
+  useEffect(() => {
+    const map = d3ClustersRef.current;
+    if (!map || map.size === 0) return;
+
+    const selId = selectedCoin?.id && String(selectedCoin.id).toUpperCase() !== "TTR"
+      ? selectedCoin.id
+      : null;
+
+    // ✅ Dimming tuned for mobile (less aggressive on small screens)
+    const dimOthers = isMobile ? 0.35 : 0.28;
+
+    // Dim others + highlight selected
+    for (const [id, obj] of map.entries()) {
+      const isSel = selId && id === selId;
+
+      // Opacity / dimming
+      obj.g.style("opacity", selId ? (isSel ? 1 : dimOthers) : 1);
+
+      // Visual states
+      if (isSel) {
+        // Selected: always on top with strong glow
+        obj.g.raise();
+        obj.outline.style("opacity", 1).style("filter", "url(#gold-glow-strong)");
+        obj.halo?.style("opacity", 1);
+      } else {
+        // If a selection exists, others must be OFF (no hover glow)
+        if (selId) obj.g.classed("is-hover", false);
+
+        const hov = !selId && obj.g.classed("is-hover"); // hover only when nothing selected
+        obj.outline.style("opacity", hov ? 0.9 : 0).style("filter", hov ? "url(#gold-glow-soft)" : null);
+        obj.halo?.style("opacity", hov ? 0.55 : 0);
+      }
+    }
+  }, [selectedCoin, mounted, isMobile]);
+
+  // Maintain selectedIdRef for hover logic (no rerender)
+  useEffect(() => {
+    const id = selectedCoin?.id && String(selectedCoin.id).toUpperCase() !== "TTR"
+      ? String(selectedCoin.id)
+      : null;
+    selectedIdRef.current = id;
+  }, [selectedCoin]);
+
 
   if (!mounted) {
 
@@ -1871,9 +2241,23 @@ ttr.append("image")
   }
 
   const startCloseInfo = () => {
-    if (Date.now() - (lastPanelOpenAtRef.current || 0) < 250) return;
+    // ✅ instant kill glow (prevents "stuck lit" until hover recalculates)
+    forceClearClusterGlow();
+
     setClosingInfo(true);
     setTimeout(() => { setSelectedCoin(null); setClosingInfo(false); }, 300);
+  };
+
+  const forceClearClusterGlow = () => {
+    const map = d3ClustersRef.current;
+    if (!map || map.size === 0) return;
+
+    for (const [, obj] of map.entries()) {
+      obj.g.classed("is-hover", false);
+      obj.outline?.style("opacity", 0).style("filter", null);
+      obj.halo?.style("opacity", 0);
+      obj.g.style("opacity", 1);
+    }
   };
 
   const startCloseLegend = () => {
@@ -1882,19 +2266,29 @@ ttr.append("image")
     setTimeout(() => { setLegendOpen(false); setClosingInfo(false); }, 300);
   };
 
+  const startCloseManifest = () => {
+    setClosingInfo(true);
+    setTimeout(() => { setManifestOpen(false); setClosingInfo(false); }, 300);
+  };
+
   // Panels dimensions are driven by layout presets (portrait/landscape)
   const panelW = infoP.width;
   const panelH = infoP.height;
   const legendW = legendP.width;
   const legendH = legendP.height;
+  const manifestW = manifestP.width;
+  const manifestH = manifestP.height;
 
 return (
     <div
-      onPointerDownCapture={(e) => {
-        // One-tap close: closes INFO or LEGEND on ANY click/tap (even inside the panel)
-        // Guard against the same tap that just opened a panel.
+      onPointerDown={(e) => {
+        // One-tap close: closes INFO or LEGEND or MANIFEST on ANY click/tap
+        
+        // ✅ Block "ghost taps" right after opening for ALL panels
         if (Date.now() - (lastPanelOpenAtRef.current || 0) < 250) return;
+        
         if (selectedCoin) startCloseInfo();
+        if (manifestOpen) startCloseManifest();
         if (legendOpen) startCloseLegend();
       }}
       style={{ width: "100vw", height: "100vh", background: "#0c111b", position: "relative", overflow: "hidden" }}>
@@ -1923,8 +2317,20 @@ return (
         @keyframes clusterBreath { 0%,100% {transform:scale(1);} 50% {transform:scale(1.035);} }
         .cluster-breath { transform-origin: center center; transform-box: fill-box; will-change: transform, opacity; backface-visibility: hidden; animation: clusterBreath 4.8s ease-in-out infinite; }
         @keyframes ttrHaloPulse {
-          0%, 100% { opacity: 0.35; transform: scale(1); filter: drop-shadow(0 0 6px rgba(80, 190, 255, 0.35)) drop-shadow(0 0 14px rgba(40, 140, 255, 0.22)); }
-          50% { opacity: 0.65; transform: scale(1.06); filter: drop-shadow(0 0 10px rgba(80, 190, 255, 0.55)) drop-shadow(0 0 22px rgba(40, 140, 255, 0.35)); }
+          0%, 100% {
+            opacity: 0.35;
+            transform: scale(1);
+            filter:
+              drop-shadow(0 0 6px rgba(255,180,90,0.30))
+              drop-shadow(0 0 14px rgba(255,120,35,0.18));
+          }
+          50% {
+            opacity: 0.65;
+            transform: scale(1.06);
+            filter:
+              drop-shadow(0 0 10px rgba(255,190,95,0.48))
+              drop-shadow(0 0 22px rgba(255,120,35,0.28));
+          }
         }
         .ttr-halo-pulse { transform-origin: center center; transform-box: fill-box; will-change: transform, opacity, filter; animation: ttrHaloPulse 4.8s ease-in-out infinite; }
 
@@ -1960,6 +2366,14 @@ return (
           -webkit-overflow-scrolling: touch;
         }
         .woc-safe *{ max-width: 100%; }
+
+        /* 7️⃣ Cluster hover/selected states (filters managed by D3 for reliability) */
+        .is-hover .cluster-outline {
+          opacity: 0.9 !important;
+        }
+        .is-selected .cluster-outline {
+          opacity: 1 !important;
+        }
 `}</style>
 
       <div style={{
@@ -1993,6 +2407,202 @@ return (
             // zIndex comes from layout preset (titleS)
           }}
         />
+
+        {/* Outline18 - 18-sided decorative outline */}
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="-240 -240 480 480"
+          style={{
+            position: "absolute",
+            ...outline18S,
+            pointerEvents: "none",
+          }}
+        >
+          <defs>
+            {/* Cuivre sobre */}
+            <linearGradient id="copperClean" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#e2b97a"/>
+              <stop offset="35%" stopColor="#b07a3a"/>
+              <stop offset="65%" stopColor="#7a4a22"/>
+              <stop offset="100%" stopColor="#e8c48a"/>
+            </linearGradient>
+            {/* Néon bleu */}
+            <linearGradient id="neonBlue" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#9be7ff"/>
+              <stop offset="50%" stopColor="#3db9ff"/>
+              <stop offset="100%" stopColor="#9be7ff"/>
+            </linearGradient>
+            {/* Glow néon (ultra fin, animé) */}
+            <filter id="neonGlow" x="-60%" y="-60%" width="220%" height="220%">
+              <feGaussianBlur in="SourceGraphic" stdDeviation="1.6">
+                <animate attributeName="stdDeviation" values="1.4;2.4;1.4" dur="2.8s" repeatCount="indefinite" calcMode="spline" keySplines="0.42 0 0.58 1; 0.42 0 0.58 1"/>
+              </feGaussianBlur>
+            </filter>
+          </defs>
+          {/* OUTLINE UNIQUE — 18 côtés */}
+          <g>
+            {/* Contour cuivre */}
+            <path
+              d="M -138.564 -160 L -138.564 -80 L -207.846 -40 L -207.846 40 L -138.564 80 L -138.564 160 L -69.282 200 L 0 160 L 69.282 200 L 138.564 160 L 138.564 80 L 207.846 40 L 207.846 -40 L 138.564 -80 L 138.564 -160 L 69.282 -200 L 0 -160 L -69.282 -200 Z"
+              fill="none"
+              stroke="url(#copperClean)"
+              strokeWidth="11"
+              strokeLinejoin="miter"
+              vectorEffect="non-scaling-stroke"
+              shapeRendering="geometricPrecision"
+            />
+            {/* Néon bleu — glow */}
+            <path
+              d="M -138.564 -160 L -138.564 -80 L -207.846 -40 L -207.846 40 L -138.564 80 L -138.564 160 L -69.282 200 L 0 160 L 69.282 200 L 138.564 160 L 138.564 80 L 207.846 40 L 207.846 -40 L 138.564 -80 L 138.564 -160 L 69.282 -200 L 0 -160 L -69.282 -200 Z"
+              fill="none"
+              stroke="url(#neonBlue)"
+              strokeWidth="2.6"
+              strokeLinejoin="miter"
+              vectorEffect="non-scaling-stroke"
+              filter="url(#neonGlow)"
+              opacity="0.65"
+            >
+              <animate attributeName="opacity" values="0.4;0.75;0.4" dur="2.8s" repeatCount="indefinite" calcMode="spline" keySplines="0.42 0 0.58 1; 0.42 0 0.58 1"/>
+            </path>
+            {/* Néon bleu — cœur */}
+            <path
+              d="M -138.564 -160 L -138.564 -80 L -207.846 -40 L -207.846 40 L -138.564 80 L -138.564 160 L -69.282 200 L 0 160 L 69.282 200 L 138.564 160 L 138.564 80 L 207.846 40 L 207.846 -40 L 138.564 -80 L 138.564 -160 L 69.282 -200 L 0 -160 L -69.282 -200 Z"
+              fill="none"
+              stroke="#c9f4ff"
+              strokeWidth="1"
+              strokeLinejoin="miter"
+              vectorEffect="non-scaling-stroke"
+              opacity="0.85"
+            >
+              <animate attributeName="opacity" values="0.55;0.95;0.55" dur="2.8s" repeatCount="indefinite" calcMode="spline" keySplines="0.42 0 0.58 1; 0.42 0 0.58 1"/>
+            </path>
+          </g>
+        </svg>
+
+        {/* Outline30 - 30-sided SILVER decorative outline */}
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="-420 -420 840 840"
+          style={{
+            ...outline30S,
+            pointerEvents: "none",
+          }}
+        >
+          <defs>
+            <linearGradient id="silverClean" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#f2f4f7"/>
+              <stop offset="35%" stopColor="#b7bec8"/>
+              <stop offset="65%" stopColor="#7f8793"/>
+              <stop offset="100%" stopColor="#f7f9fb"/>
+            </linearGradient>
+
+            <linearGradient id="neonIce" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#c9f6ff"/>
+              <stop offset="50%" stopColor="#45d6ff"/>
+              <stop offset="100%" stopColor="#c9f6ff"/>
+            </linearGradient>
+
+            <filter id="iceGlow" x="-60%" y="-60%" width="220%" height="220%">
+              <feGaussianBlur in="SourceGraphic" stdDeviation="1.4">
+                <animate attributeName="stdDeviation"
+                         values="1.1;2.1;1.1"
+                         dur="2.8s"
+                         repeatCount="indefinite"
+                         calcMode="spline"
+                         keySplines="0.42 0 0.58 1; 0.42 0 0.58 1"/>
+              </feGaussianBlur>
+            </filter>
+          </defs>
+
+          <g>
+            <path d="M -138.564 -320 L -69.282 -280 L 0 -320 L 69.282 -280 L 138.564 -320 L 207.846 -280 L 207.846 -200 L 277.128 -160 L 277.128 -80 L 346.410 -40 L 346.410 40 L 277.128 80 L 277.128 160 L 207.846 200 L 207.846 280 L 138.564 320 L 69.282 280 L 0 320 L -69.282 280 L -138.564 320 L -207.846 280 L -207.846 200 L -277.128 160 L -277.128 80 L -346.410 40 L -346.410 -40 L -277.128 -80 L -277.128 -160 L -207.846 -200 L -207.846 -280 Z"
+                  fill="none" stroke="url(#silverClean)" strokeWidth="10"
+                  strokeLinejoin="miter" vectorEffect="non-scaling-stroke"
+                  shapeRendering="geometricPrecision"/>
+
+            <path d="M -138.564 -320 L -69.282 -280 L 0 -320 L 69.282 -280 L 138.564 -320 L 207.846 -280 L 207.846 -200 L 277.128 -160 L 277.128 -80 L 346.410 -40 L 346.410 40 L 277.128 80 L 277.128 160 L 207.846 200 L 207.846 280 L 138.564 320 L 69.282 280 L 0 320 L -69.282 280 L -138.564 320 L -207.846 280 L -207.846 200 L -277.128 160 L -277.128 80 L -346.410 40 L -346.410 -40 L -277.128 -80 L -277.128 -160 L -207.846 -200 L -207.846 -280 Z"
+                  fill="none" stroke="url(#neonIce)" strokeWidth="2.2"
+                  strokeLinejoin="miter" vectorEffect="non-scaling-stroke"
+                  filter="url(#iceGlow)" opacity="0.55">
+              <animate attributeName="opacity"
+                       values="0.32;0.65;0.32"
+                       dur="2.8s" repeatCount="indefinite"
+                       calcMode="spline"
+                       keySplines="0.42 0 0.58 1; 0.42 0 0.58 1"/>
+            </path>
+
+            <path d="M -138.564 -320 L -69.282 -280 L 0 -320 L 69.282 -280 L 138.564 -320 L 207.846 -280 L 207.846 -200 L 277.128 -160 L 277.128 -80 L 346.410 -40 L 346.410 40 L 277.128 80 L 277.128 160 L 207.846 200 L 207.846 280 L 138.564 320 L 69.282 280 L 0 320 L -69.282 280 L -138.564 320 L -207.846 280 L -207.846 200 L -277.128 160 L -277.128 80 L -346.410 40 L -346.410 -40 L -277.128 -80 L -277.128 -160 L -207.846 -200 L -207.846 -280 Z"
+                  fill="none" stroke="#eafcff" strokeWidth="0.9"
+                  strokeLinejoin="miter" vectorEffect="non-scaling-stroke"
+                  opacity="0.78">
+              <animate attributeName="opacity"
+                       values="0.55;0.9;0.55"
+                       dur="2.8s" repeatCount="indefinite"
+                       calcMode="spline"
+                       keySplines="0.42 0 0.58 1; 0.42 0 0.58 1"/>
+            </path>
+          </g>
+        </svg>
+
+        {/* Outline42 - 42-sided GOLD decorative outline */}
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="-560 -560 1120 1120"
+          style={{
+            ...outline42S,
+            pointerEvents: "none",
+          }}
+        >
+          <defs>
+            {/* Or */}
+            <linearGradient id="goldClean42" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#fff4cc"/>
+              <stop offset="35%" stopColor="#e6c97a"/>
+              <stop offset="65%" stopColor="#b89b3c"/>
+              <stop offset="100%" stopColor="#fff7d6"/>
+            </linearGradient>
+            {/* 🔵 Bleu fort mais fin */}
+            <linearGradient id="neonBlueStrong" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#8fdcff"/>
+              <stop offset="50%" stopColor="#2aaeff"/>
+              <stop offset="100%" stopColor="#8fdcff"/>
+            </linearGradient>
+            {/* Glow bleu */}
+            <filter id="neonGlowStrong" x="-60%" y="-60%" width="220%" height="220%">
+              <feGaussianBlur in="SourceGraphic" stdDeviation="2.2">
+                <animate attributeName="stdDeviation"
+                         values="1.8;3;1.8"
+                         dur="2.8s"
+                         repeatCount="indefinite"
+                         calcMode="spline"
+                         keySplines="0.42 0 0.58 1; 0.42 0 0.58 1"/>
+              </feGaussianBlur>
+            </filter>
+          </defs>
+          <g>
+            {/* Or */}
+            <path
+              d="M -207.846 -440 L -138.564 -400 L -69.282 -440 L 0 -400 L 69.282 -440 L 138.564 -400 L 207.846 -440 L 277.128 -400 L 277.128 -320 L 346.410 -280 L 346.410 -200 L 415.692 -160 L 415.692 -80 L 484.974 -40 L 484.974 40 L 415.692 80 L 415.692 160 L 346.410 200 L 346.410 280 L 277.128 320 L 277.128 400 L 207.846 440 L 138.564 400 L 69.282 440 L 0 400 L -69.282 440 L -138.564 400 L -207.846 440 L -277.128 400 L -277.128 320 L -346.410 280 L -346.410 200 L -415.692 160 L -415.692 80 L -484.974 40 L -484.974 -40 L -415.692 -80 L -415.692 -160 L -346.410 -200 L -346.410 -280 L -277.128 -320 L -277.128 -400 Z"
+              fill="none"
+              stroke="url(#goldClean42)"
+              strokeWidth="9"
+              vectorEffect="non-scaling-stroke"/>
+            {/* 🔵 Bleu ajusté */}
+            <path
+              d="M -207.846 -440 L -138.564 -400 L -69.282 -440 L 0 -400 L 69.282 -440 L 138.564 -400 L 207.846 -440 L 277.128 -400 L 277.128 -320 L 346.410 -280 L 346.410 -200 L 415.692 -160 L 415.692 -80 L 484.974 -40 L 484.974 40 L 415.692 80 L 415.692 160 L 346.410 200 L 346.410 280 L 277.128 320 L 277.128 400 L 207.846 440 L 138.564 400 L 69.282 440 L 0 400 L -69.282 440 L -138.564 400 L -207.846 440 L -277.128 400 L -277.128 320 L -346.410 280 L -346.410 200 L -415.692 160 L -415.692 80 L -484.974 40 L -484.974 -40 L -415.692 -80 L -415.692 -160 L -346.410 -200 L -346.410 -280 L -277.128 -320 L -277.128 -400 Z"
+              fill="none"
+              stroke="url(#neonBlueStrong)"
+              strokeWidth="2.4"
+              vectorEffect="non-scaling-stroke"
+              filter="url(#neonGlowStrong)"
+              opacity="0.85">
+              <animate attributeName="opacity"
+                       values="0.65;0.95;0.65"
+                       dur="2.8s"
+                       repeatCount="indefinite"/>
+            </path>
+          </g>
+        </svg>
 
         <svg ref={svgRef} width={BASE_W} height={BASE_H} style={{ position: "absolute", inset: 0, zIndex: 10, touchAction: "manipulation" }} />
 
@@ -2131,6 +2741,43 @@ return (
   />
 </a>
 
+{/* MANIFEST button */}
+<div
+  onClick={(e) => {
+    e.stopPropagation();
+    markPanelOpened();
+    setSelectedCoin(null);
+    setLegendOpen(false);
+    setClosingInfo(false);
+    setManifestOpen(true);
+  }}
+  onPointerDown={(e) => {
+    const target = e.currentTarget;
+    const baseScale = (layout.buttons?.manifest?.scale || 1) * (textCfg.globalScale || 1);
+    target.style.transform = `scale(${baseScale * 1.06})`;
+    setTimeout(() => {
+      if (target) target.style.transform = `scale(${baseScale})`;
+    }, 140);
+  }}
+  style={{
+    position: "absolute",
+    ...manifestBtnS,
+    transform: `scale(${(layout.buttons?.manifest?.scale || 1) * (textCfg.globalScale || 1)})`,
+    cursor: "pointer",
+    touchAction: "manipulation",
+    transition: "transform 140ms ease",
+  }}
+  title="Manifest"
+>
+  <img
+    src="/btn-manif.png"
+    alt="Manifest"
+    className="woc-icon-btn"
+    style={{ width: "100%", height: "100%" }}
+    draggable={false}
+  />
+</div>
+
 {/* INFO PANEL - Now inside wrapper */}
 {selectedCoin && (() => {
   // ✅ No uiScale needed - wrapper already applies scale(x,y)
@@ -2187,6 +2834,7 @@ return (
       <div className="info-text-zone">
         <div
           className="woc-text woc-safe"
+          onPointerDown={(e) => e.stopPropagation()}
           style={{
             position: "absolute",
             top: "50%",
@@ -2335,6 +2983,7 @@ return (
 
       {/* Text is confined to this zone (scroll inside) */}
       <div className="legend-text-zone"
+      onPointerDown={(e) => e.stopPropagation()}
       style={{
         width: legendP.safeAreaWidth,
         maxHeight: legendP.safeAreaHeight,
@@ -2383,6 +3032,89 @@ return (
           <div>
 </div>
         </div>
+      </div>
+    </div>
+  </div>
+  );
+})()}
+
+{/* MANIFEST PANEL - Image panel */}
+{manifestOpen && (() => {
+  const panelScale = (textCfg.panelScale || 1) * (textCfg.globalScale || 1);
+  
+  return (
+  <div
+    data-manifest-panel
+    onPointerDown={(e) => e.stopPropagation()}
+    style={{
+      position: "absolute",
+      left: "50%",
+      top: manifestP.top,
+      transform: `translate(-50%, -50%) scale(${panelScale})`,
+      transformOrigin: "center center",
+      width: manifestW,
+      height: manifestH,
+      zIndex: 1000001,
+      pointerEvents: "auto",
+      animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`,
+      overflow: "hidden",
+      boxSizing: "border-box",
+    }}
+  >
+    <div
+      className="woc-panel-inner"
+      style={{
+        animation: `${closingInfo ? "fadeOut" : "fadeIn"} 0.3s ease forwards`,
+        width: "100%",
+        height: "100%",
+        position: "relative",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <img
+        src="/virgin-border.png"
+        alt="frame"
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+        }}
+      />
+
+      {/* Image safe-zone container */}
+      <div
+        style={{
+          position: "absolute",
+          top: "50%",
+          left: "50%",
+          width: manifestP.safeAreaWidth,
+          height: manifestP.safeAreaHeight,
+          transform: "translate(-50%, -50%)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: `${manifestP.paddingTop} ${manifestP.paddingX} ${manifestP.paddingBottom}`,
+          boxSizing: "border-box",
+          zIndex: 2,
+        }}
+      >
+        <img
+          src="/manif.png"
+          alt="Manifest"
+          style={{
+            maxWidth: "100%",
+            maxHeight: "100%",
+            width: "auto",
+            height: "auto",
+            objectFit: "contain",
+            pointerEvents: "none",
+          }}
+        />
       </div>
     </div>
   </div>
